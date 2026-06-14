@@ -1,7 +1,16 @@
-﻿@page "/"
+@page "/"
 
-<PageTitle>Home</PageTitle>
+<PageTitle>GW2 Stonks</PageTitle>
 
-<h1>Hello, world!</h1>
+<RadzenStack Gap="1rem">
+    <RadzenText TextStyle="TextStyle.H3">GW2 Stonks</RadzenText>
+    <RadzenText TextStyle="TextStyle.Body1">
+        Find profitable Guild Wars 2 crafting opportunities. Browse the item catalog with live
+        trading-post prices, and (soon) see whether it's cheaper to craft or buy.
+    </RadzenText>
+    <div>
+        <RadzenButton Text="Browse items" Icon="inventory_2" Click="@(() => Nav.NavigateTo("items"))" />
+    </div>
+</RadzenStack>
 
-Welcome to your new app.
+@inject NavigationManager Nav

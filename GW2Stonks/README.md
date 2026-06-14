@@ -2,7 +2,7 @@
 
 A local tool for finding **profitable crafting opportunities in Guild Wars 2**. It pulls item, recipe, and trading-post data from the GW2 API, stores it locally, and works out whether it's cheaper to **craft** an item (recursively, down through its sub-components) or **buy** it off the trading post — then helps you plan a day's worth of crafting.
 
-> **Status:** early setup. Not hosted anywhere — runs only on your machine.
+> **Status:** Phases 0–1 done — catalog + prices sync into MariaDB and a browsable Items grid works. Not hosted anywhere — runs only on your machine.
 
 ---
 
@@ -33,11 +33,13 @@ A local tool for finding **profitable crafting opportunities in Guild Wars 2**. 
 
 ```
 GW2Stonks/
-├─ Data/             EF Core: database context, entities, migrations
-├─ Gw2Api/           Typed clients + models for the GW2 API
-├─ Services/         Catalog sync, price refresh, craft-vs-buy solver, planner
-├─ Components/Pages/ Sync · Browse · Planner · Settings (Radzen UI)
-└─ Program.cs        Dependency-injection wiring
+├─ Data/             EF Core: AppDbContext, entities, migrations
+├─ Gw2Api/           Typed GW2 API client, DTOs, rate-limiting handler, options
+├─ Services/         Catalog/price sync, background refresh, shared queries (solver/planner later)
+├─ Models/           View models (e.g. the items grid row)
+├─ Util/             Helpers (e.g. gold/silver/copper formatting)
+├─ Components/Pages/ Home · Items  (Browse · Planner · Settings later)
+└─ Program.cs        DI wiring + headless `sync`/`query` CLI commands
 ```
 
 The **craft-vs-buy solver** walks each recipe tree and, for every item, takes the cheaper of *buying it* or *crafting it from its ingredients* — with memoisation so shared sub-components aren't recomputed.
@@ -45,7 +47,7 @@ The **craft-vs-buy solver** walks each recipe tree and, for every item, takes th
 ## Roadmap
 
 - [x] **Phase 0 — Foundation:** added Radzen + EF Core (Pomelo) packages, wired DI, created the entity model + `AppDbContext`, generated the `InitialCreate` migration, built the `gw2stonks` schema in MariaDB, and confirmed the app boots and serves with Radzen wired in. ✅
-- [ ] **Phase 1 — Data:** GW2 API client, bulk catalog sync, on-demand price refresh, a sync page with progress.
+- [x] **Phase 1 — Data:** GW2 API client (batched, rate-limited, resilient), bulk catalog sync (items + recipes) and a 5-minute background price refresh, plus an **Items** page — a server-side paged/filtered/sorted Radzen grid with icons and buy/sell prices in gold/silver/copper. Verified end-to-end against the live API: 73,923 items · 13,139 recipes · 27,940 prices. ✅
 - [ ] **Phase 2 — Profit browser:** the craft-vs-buy solver and a category-filtered grid of items with profit columns.
 - [ ] **Phase 3 — Planner:** shopping list + ordered crafting steps, using your account key to subtract owned stock.
 - [ ] **Phase 4 — Later:** daily-cooldown awareness and polish.
@@ -75,3 +77,18 @@ dotnet run
 ```
 
 The schema is managed by EF Core migrations (in `Migrations/`). `dotnet ef database update` creates the `gw2stonks` database if it doesn't exist.
+
+## Syncing data
+
+The database starts empty. Populate it either way:
+
+- **In the app:** open the **Items** page and click **Sync catalog** (pulls ~74k items + ~13k recipes, takes ~1–2 min), then **Refresh prices**. After that, prices refresh automatically every 5 minutes in the background.
+- **From a terminal** (handy for first-time load or a scheduled task):
+
+  ```powershell
+  dotnet run -- sync all       # items, then recipes, then prices
+  dotnet run -- sync items     # or just one set: items | recipes | prices
+  dotnet run -- query Wood     # diagnostic: list items whose name contains "Wood"
+  ```
+
+Tunable settings live under the `Gw2` section of `appsettings.json` (`PriceRefreshMinutes`, `MaxConcurrency`, `RequestsPerSecond`, `BatchSize`). A client-side rate limiter keeps requests well under the GW2 API's ~600/min limit.

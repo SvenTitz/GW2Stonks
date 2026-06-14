@@ -36,3 +36,41 @@ h1:focus {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+/* Items grid: square item icons that never stretch or clip */
+.gw2-icon-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+}
+
+.gw2-item-icon {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+    display: block;
+}
+
+/* Coin (gold/silver/copper) price display */
+.gw2-coins {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.gw2-coins .gw2-coin-amt {
+    margin-left: 0.4em;
+}
+
+.gw2-coins .gw2-coin-amt:first-child {
+    margin-left: 0;
+}
+
+.gw2-coin-icon {
+    width: 14px;
+    height: 14px;
+    object-fit: contain;
+    vertical-align: middle;
+    margin: 0 1px;
+}

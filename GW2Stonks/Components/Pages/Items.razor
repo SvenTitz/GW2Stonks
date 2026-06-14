@@ -1,0 +1,165 @@
+@page "/items"
+@using System.Linq.Dynamic.Core
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject Gw2SyncService Sync
+@inject NotificationService Notifications
+
+<PageTitle>Items</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="1rem">
+        <RadzenText TextStyle="TextStyle.H4" class="rz-m-0">Items</RadzenText>
+        <RadzenButton Text="Sync catalog" Icon="cloud_download" Click="@SyncCatalog" Disabled="@_busy" />
+        <RadzenButton Text="Refresh prices" Icon="refresh" ButtonStyle="ButtonStyle.Secondary"
+                      Click="@RefreshPrices" Disabled="@_busy" />
+        @if (_status is not null)
+        {
+            <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                @_status.ItemCount.ToString("N0") items · @_status.RecipeCount.ToString("N0") recipes · @_status.PriceCount.ToString("N0") priced
+                @if (_pricesUpdated is not null)
+                {
+                    <text> · prices updated @_pricesUpdated.Value.ToLocalTime().ToString("g")</text>
+                }
+            </RadzenText>
+        }
+    </RadzenStack>
+
+    @if (_busy && _progress is not null)
+    {
+        <RadzenStack Gap="0.25rem">
+            <RadzenText TextStyle="TextStyle.Caption">
+                @_progress.Value.Phase (@_progress.Value.Done.ToString("N0") / @_progress.Value.Total.ToString("N0"))
+            </RadzenText>
+            <RadzenProgressBar Value="@_progress.Value.Percent" ShowValue="false" />
+        </RadzenStack>
+    }
+
+    @if (_status is { ItemCount: 0 } && !_busy)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" ShowIcon="true" AllowClose="false">
+            No items yet. Click <b>Sync catalog</b> to pull the GW2 item and recipe catalog into the database.
+        </RadzenAlert>
+    }
+
+    <RadzenDataGrid @ref="_grid" TItem="ItemListRow" Data="@_items" Count="@_count" LoadData="@LoadData"
+                    IsLoading="@_isLoading" AllowPaging="true" PageSize="PageSize"
+                    AllowSorting="true" AllowFiltering="true" FilterMode="FilterMode.Simple"
+                    PagerHorizontalAlign="HorizontalAlign.Center" ShowPagingSummary="true"
+                    AllowColumnResize="true">
+        <Columns>
+            <RadzenDataGridColumn TItem="ItemListRow" Title="" Sortable="false" Filterable="false" Width="72px" TextAlign="TextAlign.Center">
+                <Template Context="row">
+                    <div class="gw2-icon-wrap">
+                        @if (!string.IsNullOrEmpty(row.IconUrl))
+                        {
+                            <img class="gw2-item-icon" src="@row.IconUrl" alt="" loading="lazy" />
+                        }
+                    </div>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Name" Title="Name" MinWidth="200px" MaxWidth="300px" />
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Type" Title="Type" Width="150px" />
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Rarity" Title="Rarity" Width="120px" />
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Level" Title="Lvl" Width="80px" />
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Buy" Title="Buy" Width="150px" Filterable="false" TextAlign="TextAlign.Right">
+                <Template Context="row"><CoinDisplay Copper="@row.Buy" /></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Sell" Title="Sell" Width="150px" Filterable="false" TextAlign="TextAlign.Right">
+                <Template Context="row"><CoinDisplay Copper="@row.Sell" /></Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenStack>
+
+@code {
+    private const int PageSize = 50;
+
+    private RadzenDataGrid<ItemListRow>? _grid;
+    private IList<ItemListRow> _items = new List<ItemListRow>();
+    private int _count;
+    private bool _isLoading;
+
+    private bool _busy;
+    private SyncProgress? _progress;
+    private DashboardStatus? _status;
+    private DateTime? _pricesUpdated;
+
+    protected override async Task OnInitializedAsync() => await LoadStatus();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // RadzenDataGrid treats a non-null Data binding as "data provided" and won't fire
+        // LoadData until a user action. Force the first page to load on initial render.
+        if (firstRender && _grid is not null)
+            await _grid.Reload();
+    }
+
+    private async Task LoadData(LoadDataArgs args)
+    {
+        _isLoading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            IQueryable<ItemListRow> query = db.Items.AsNoTracking().ToItemRows();
+
+            if (!string.IsNullOrWhiteSpace(args.Filter))
+                query = query.Where(args.Filter);
+
+            _count = await query.CountAsync();
+
+            if (!string.IsNullOrWhiteSpace(args.OrderBy))
+                query = query.OrderBy(args.OrderBy);
+            else
+                query = query.OrderBy(r => r.Name);
+
+            _items = await query.Skip(args.Skip ?? 0).Take(args.Top ?? PageSize).ToListAsync();
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private Task SyncCatalog() => RunJob("Catalog synced", p => Sync.SyncCatalogAsync(p));
+
+    private Task RefreshPrices() => RunJob("Prices refreshed", p => Sync.RefreshPricesAsync(p));
+
+    private async Task RunJob(string successMessage, Func<IProgress<SyncProgress>, Task> job)
+    {
+        if (_busy) return;
+        _busy = true;
+        _progress = new SyncProgress("Starting…", 0, 0);
+
+        var progress = new Progress<SyncProgress>(sp =>
+        {
+            _progress = sp;
+            InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            await Task.Run(() => job(progress));
+            Notifications.Notify(NotificationSeverity.Success, successMessage);
+            await LoadStatus();
+            if (_grid is not null) await _grid.Reload();
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Operation failed", ex.Message, 8000);
+        }
+        finally
+        {
+            _busy = false;
+            _progress = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadStatus()
+    {
+        _status = await Sync.GetStatusAsync();
+        _pricesUpdated = _status.States.TryGetValue("prices", out var s) ? s.LastSyncedUtc : null;
+        StateHasChanged();
+    }
+}
