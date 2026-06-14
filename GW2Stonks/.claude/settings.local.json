@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(dotnet add package Pomelo.EntityFrameworkCore.MySql 2>&1)"
+    ]
+  }
+}
