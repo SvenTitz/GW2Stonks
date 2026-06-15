@@ -1,4 +1,4 @@
-@* Renders a copper amount as GW2 gold/silver/copper with coin icons. *@
+@* Renders a copper amount as GW2 gold/silver/copper with coin icons. Handles negatives. *@
 
 @if (Copper is null)
 {
@@ -7,6 +7,10 @@
 else
 {
     <span class="gw2-coins">
+        @if (_negative)
+        {
+            <span class="gw2-coin-amt">−</span>
+        }
         @if (_gold > 0)
         {
             <span class="gw2-coin-amt">@_gold</span><img class="gw2-coin-icon" src="@GoldIcon" alt="g" title="gold" />
@@ -22,6 +26,7 @@ else
 @code {
     [Parameter] public int? Copper { get; set; }
 
+    private bool _negative;
     private int _gold, _silver, _copper;
 
     private const string GoldIcon = "https://wiki.guildwars2.com/images/d/d1/Gold_coin.png";
@@ -31,6 +36,8 @@ else
     protected override void OnParametersSet()
     {
         var c = Copper ?? 0;
+        _negative = c < 0;
+        c = Math.Abs(c);
         _gold = c / 10000;
         _silver = c % 10000 / 100;
         _copper = c % 100;

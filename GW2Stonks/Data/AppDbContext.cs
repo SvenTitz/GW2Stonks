@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<RecipeIngredient> RecipeIngredients => Set<RecipeIngredient>();
     public DbSet<Price> Prices => Set<Price>();
+    public DbSet<ItemVolume> ItemVolumes => Set<ItemVolume>();
     public DbSet<SyncState> SyncStates => Set<SyncState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -63,6 +64,16 @@ public class AppDbContext : DbContext
             e.HasOne(p => p.Item)
                 .WithOne(i => i.Price)
                 .HasForeignKey<Price>(p => p.ItemId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ItemVolume>(e =>
+        {
+            e.HasKey(v => v.ItemId);
+            e.Property(v => v.ItemId).ValueGeneratedNever();
+            e.HasOne(v => v.Item)
+                .WithOne()
+                .HasForeignKey<ItemVolume>(v => v.ItemId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

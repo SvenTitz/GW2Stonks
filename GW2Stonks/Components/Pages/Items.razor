@@ -101,7 +101,10 @@
         {
             await using var db = await DbFactory.CreateDbContextAsync();
 
-            IQueryable<ItemListRow> query = db.Items.AsNoTracking().ToItemRows();
+            // Hide GW2's unnamed internal/placeholder items — they're noise in a browse grid.
+            IQueryable<ItemListRow> query = db.Items.AsNoTracking()
+                .Where(i => i.Name != "")
+                .ToItemRows();
 
             if (!string.IsNullOrWhiteSpace(args.Filter))
                 query = query.Where(args.Filter);

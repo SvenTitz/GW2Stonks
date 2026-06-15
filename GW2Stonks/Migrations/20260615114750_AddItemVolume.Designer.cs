@@ -4,6 +4,7 @@ using GW2Stonks.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace GW2Stonks.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260615114750_AddItemVolume")]
+    partial class AddItemVolume
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -72,6 +75,9 @@ namespace GW2Stonks.Migrations
 
                     b.Property<int>("BoughtPerDay")
                         .HasColumnType("int");
+
+                    b.Property<double>("CoverageHours")
+                        .HasColumnType("double");
 
                     b.Property<int>("DemandNow")
                         .HasColumnType("int");

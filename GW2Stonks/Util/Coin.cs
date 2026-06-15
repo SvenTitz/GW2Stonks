@@ -10,6 +10,8 @@ public static class Coin
         int c = copper.Value;
         if (c == 0) return "0c";
 
+        string sign = c < 0 ? "-" : "";
+        c = Math.Abs(c);
         int gold = c / 10000;
         int silver = c % 10000 / 100;
         int cop = c % 100;
@@ -18,6 +20,6 @@ public static class Coin
         if (gold > 0) parts.Add($"{gold}g");
         if (silver > 0) parts.Add($"{silver}s");
         if (cop > 0) parts.Add($"{cop}c");
-        return string.Join(' ', parts);
+        return sign + string.Join(' ', parts);
     }
 }

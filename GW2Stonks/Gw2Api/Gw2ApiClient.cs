@@ -33,6 +33,9 @@ public sealed class Gw2ApiClient
     public Task<List<Gw2PriceDto>> GetPricesAsync(IEnumerable<int> ids, CancellationToken ct = default) =>
         GetByIdsAsync<Gw2PriceDto>("v2/commerce/prices", ids, ct);
 
+    public Task<List<Gw2ListingsDto>> GetListingsAsync(IEnumerable<int> ids, CancellationToken ct = default) =>
+        GetByIdsAsync<Gw2ListingsDto>("v2/commerce/listings", ids, ct);
+
     private async Task<List<T>> GetListAsync<T>(string path, CancellationToken ct)
     {
         var result = await _http.GetFromJsonAsync<List<T>>(path, Json, ct);

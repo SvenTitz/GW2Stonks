@@ -1,0 +1,37 @@
+@* Recursively renders a craft-breakdown node and its children. *@
+
+@* Indent via an integer CSS variable so locale number formatting can't corrupt the value
+   (e.g. de-DE renders 1.5 as "1,5", which is invalid CSS). CSS calc always uses a period. *@
+<div class="craft-node-row" style="--depth:@Depth">
+    @if (!string.IsNullOrEmpty(Node.IconUrl))
+    {
+        <img class="gw2-tree-icon" src="@Node.IconUrl" alt="" loading="lazy" />
+    }
+    <span class="craft-count">@Node.Count×</span>
+    <span class="craft-name">@Node.Name</span>
+    <RadzenBadge Text="@Node.Decision" BadgeStyle="@BadgeFor(Node.Decision)" />
+    <span class="craft-cost">
+        <CoinDisplay Copper="@Node.UnitEffective" />&nbsp;ea
+        @if (Node.Count > 1)
+        {
+            <span class="craft-subtotal">(<CoinDisplay Copper="@Node.Subtotal" />)</span>
+        }
+    </span>
+</div>
+
+@foreach (var child in Node.Children)
+{
+    <CraftTreeView Node="child" Depth="Depth + 1" />
+}
+
+@code {
+    [Parameter, EditorRequired] public CraftNode Node { get; set; } = default!;
+    [Parameter] public int Depth { get; set; }
+
+    private static BadgeStyle BadgeFor(string decision) => decision switch
+    {
+        "Craft" => BadgeStyle.Info,
+        "Buy" => BadgeStyle.Light,
+        _ => BadgeStyle.Danger
+    };
+}

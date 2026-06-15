@@ -90,7 +90,9 @@ public sealed class Gw2SyncService
                 var entity = new Item
                 {
                     Id = d.Id,
-                    Name = Truncate(d.Name, 200),
+                    // GW2 names sometimes carry stray leading/trailing whitespace (e.g. " Mastery Point"),
+                    // which breaks alphabetical sorting and display — trim it.
+                    Name = Truncate(d.Name.Trim(), 200),
                     Type = Truncate(d.Type, 50),
                     Rarity = Truncate(d.Rarity, 30),
                     Level = d.Level,

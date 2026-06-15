@@ -2,7 +2,7 @@
 
 A local tool for finding **profitable crafting opportunities in Guild Wars 2**. It pulls item, recipe, and trading-post data from the GW2 API, stores it locally, and works out whether it's cheaper to **craft** an item (recursively, down through its sub-components) or **buy** it off the trading post — then helps you plan a day's worth of crafting.
 
-> **Status:** Phases 0–1 done — catalog + prices sync into MariaDB and a browsable Items grid works. Not hosted anywhere — runs only on your machine.
+> **Status:** Phases 0–2.5 done — catalog + prices sync into MariaDB, a browsable Items grid, a craft-vs-buy **profit browser** with per-item craft-tree breakdown, and cached trading-post **liquidity** (sold/day, sell-through) to filter out items that won't sell. Not hosted anywhere — runs only on your machine.
 
 ---
 
@@ -20,11 +20,11 @@ A local tool for finding **profitable crafting opportunities in Guild Wars 2**. 
 | UI        | Radzen Blazor components                           |
 | Database  | MariaDB 10.11                                      |
 | Data access | EF Core 9 via the Pomelo MySQL/MariaDB provider (runs on the .NET 10 runtime; Pomelo has no 10.x line yet) |
-| Data source | [GW2 API v2](https://wiki.guildwars2.com/wiki/API:2) |
+| Data sources | [GW2 API v2](https://wiki.guildwars2.com/wiki/API:2) (items, recipes, prices) · [datawars2.ie](https://datawars2.ie) (daily sales volume — the GW2 API has none) |
 
 ## Key design decisions
 
-- **Pricing is configurable** — the tool shows **both** a *conservative* number (buy materials instantly, sell instantly) and an *optimistic* one (place buy/sell orders and wait). All sell figures account for the trading post's ~15% tax.
+- **Pricing** — the crafted output is always valued at the **sell-listing** price (you list it and wait), minus the trading post's ~15% tax. A toggle controls only **how materials are bought**: *Instant buy* (pay the sell-listing) vs *Buy orders* (place bids and wait for the lower price).
 - **Your stock counts** — the shopping list subtracts materials you already own (material storage, bank, inventories) using your account API key.
 - **Catalog synced in bulk, prices on demand** — items and recipes are downloaded once; the fast-changing trading-post prices are refreshed when you ask.
 - **Daily-limited materials** (time-gated ascended mats) are **deferred** to a later phase.
@@ -35,11 +35,12 @@ A local tool for finding **profitable crafting opportunities in Guild Wars 2**. 
 GW2Stonks/
 ├─ Data/             EF Core: AppDbContext, entities, migrations
 ├─ Gw2Api/           Typed GW2 API client, DTOs, rate-limiting handler, options
-├─ Services/         Catalog/price sync, background refresh, shared queries (solver/planner later)
-├─ Models/           View models (e.g. the items grid row)
+├─ Datawars2/        Typed datawars2.ie client (daily sales-volume source)
+├─ Services/         Sync, background refresh, craft-cost solver, profit + volume services
+├─ Models/           View models (items grid row, profit row, craft-tree node)
 ├─ Util/             Helpers (e.g. gold/silver/copper formatting)
-├─ Components/Pages/ Home · Items  (Browse · Planner · Settings later)
-└─ Program.cs        DI wiring + headless `sync`/`query` CLI commands
+├─ Components/Pages/ Home · Items · Craft profit  (Planner · Settings later)
+└─ Program.cs        DI wiring + headless `sync`/`query`/`profit`/`volume` CLI commands
 ```
 
 The **craft-vs-buy solver** walks each recipe tree and, for every item, takes the cheaper of *buying it* or *crafting it from its ingredients* — with memoisation so shared sub-components aren't recomputed.
@@ -48,7 +49,8 @@ The **craft-vs-buy solver** walks each recipe tree and, for every item, takes th
 
 - [x] **Phase 0 — Foundation:** added Radzen + EF Core (Pomelo) packages, wired DI, created the entity model + `AppDbContext`, generated the `InitialCreate` migration, built the `gw2stonks` schema in MariaDB, and confirmed the app boots and serves with Radzen wired in. ✅
 - [x] **Phase 1 — Data:** GW2 API client (batched, rate-limited, resilient), bulk catalog sync (items + recipes) and a 5-minute background price refresh, plus an **Items** page — a server-side paged/filtered/sorted Radzen grid with icons and buy/sell prices in gold/silver/copper. Verified end-to-end against the live API: 73,923 items · 13,139 recipes · 27,940 prices. ✅
-- [ ] **Phase 2 — Profit browser:** the craft-vs-buy solver and a category-filtered grid of items with profit columns.
+- [x] **Phase 2 — Profit browser:** recursive, memoised craft-vs-buy solver (`min(buy, craft)` down the recipe tree, cycle-safe, Instant-buy/Buy-orders material pricing, output sold at the listing price minus 15% tax, with a seed list of vendor-bought material prices), a **Craft profit** page with discipline/type/name filters sorted by profit, and an expandable per-item **craft-tree breakdown** showing each sub-component's buy-vs-craft call. ✅
+- [x] **Phase 2.5 — Liquidity:** since the GW2 API has no sales-volume endpoint, cache daily trading-post volume from **datawars2.ie** (batched, ~30 requests) into MariaDB and refresh every 12h. The profit grid gains **sold/day** + **sell-through days** columns and a **"min sold/day"** filter, so high-margin-but-illiquid items (that never actually sell) drop out. ✅
 - [ ] **Phase 3 — Planner:** shopping list + ordered crafting steps, using your account key to subtract owned stock.
 - [ ] **Phase 4 — Later:** daily-cooldown awareness and polish.
 
@@ -86,9 +88,15 @@ The database starts empty. Populate it either way:
 - **From a terminal** (handy for first-time load or a scheduled task):
 
   ```powershell
-  dotnet run -- sync all       # items, then recipes, then prices
-  dotnet run -- sync items     # or just one set: items | recipes | prices
-  dotnet run -- query Wood     # diagnostic: list items whose name contains "Wood"
+  dotnet run -- sync all          # items, then recipes, then prices
+  dotnet run -- sync items        # or just one set: items | recipes | prices
+  dotnet run -- query Wood        # diagnostic: list items whose name contains "Wood"
+  dotnet run -- profit top        # top profitable craft items (add 'orders' for buy-order pricing)
+  dotnet run -- profit 19684      # craft-cost breakdown + profit for one item id
+  dotnet run -- volume refresh    # pull daily sales volume from datawars2.ie into the DB
+  dotnet run -- volume 19684      # show cached sold/day, supply, sell-through for one item
   ```
+
+  Volume also refreshes automatically every 12 hours in the background, and there's a **Refresh volume** button on the Craft profit page. Tunables live under the `Datawars2` section of `appsettings.json`.
 
 Tunable settings live under the `Gw2` section of `appsettings.json` (`PriceRefreshMinutes`, `MaxConcurrency`, `RequestsPerSecond`, `BatchSize`). A client-side rate limiter keeps requests well under the GW2 API's ~600/min limit.

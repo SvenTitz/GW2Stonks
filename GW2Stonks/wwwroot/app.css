@@ -74,3 +74,54 @@ h1:focus {
     vertical-align: middle;
     margin: 0 1px;
 }
+
+/* Craft breakdown tree */
+.gw2-tree-icon {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    vertical-align: middle;
+}
+
+.craft-node-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    /* Indentation per tree depth, driven by the --depth integer set in CraftTreeView. */
+    padding-left: calc(var(--depth, 0) * 1.5rem);
+}
+
+.craft-count {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.7;
+    min-width: 2.25rem;
+    text-align: right;
+}
+
+.craft-name {
+    font-weight: 500;
+}
+
+/* Keep the cost right next to the item rather than pushed to the far edge. */
+.craft-cost {
+    margin-left: 0.5rem;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+
+.craft-subtotal {
+    opacity: 0.75;
+    margin-left: 0.25rem;
+}
+
+/* Profit colouring */
+.profit-pos {
+    color: #1a9850;
+    font-weight: 600;
+}
+
+.profit-neg {
+    color: #d73027;
+}
