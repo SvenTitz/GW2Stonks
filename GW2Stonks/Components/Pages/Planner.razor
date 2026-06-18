@@ -1,0 +1,224 @@
+@page "/planner"
+@inject CartService Cart
+@inject ProfitService ProfitSvc
+@implements IDisposable
+
+<PageTitle>Planner</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="1rem">
+        <RadzenText TextStyle="TextStyle.H4" class="rz-m-0">Craft planner</RadzenText>
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Buy materials via</RadzenText>
+        <RadzenSelectBar @bind-Value="_mode" @bind-Value:after="Generate" TValue="PricingMode" Size="ButtonSize.Small">
+            <Items>
+                <RadzenSelectBarItem Text="Instant buy" Value="PricingMode.InstantBuy" />
+                <RadzenSelectBarItem Text="Buy orders" Value="PricingMode.BuyOrders" />
+            </Items>
+        </RadzenSelectBar>
+        <RadzenButton Text="Clear cart" Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                      Click="@(() => Cart.Clear())" Disabled="@(Cart.Count == 0)" />
+    </RadzenStack>
+
+    @if (Cart.Count == 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" ShowIcon="true" AllowClose="false">
+            Your cart is empty. On <b>Craft profit</b>, filter to what you want, then <b>Fill cart</b> or use the ＋ on a row.
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenCard>
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">To craft (@Cart.Count items)</RadzenText>
+            <RadzenDataGrid Data="@Cart.Items" TItem="CartItem" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
+                <Columns>
+                    <RadzenDataGridColumn TItem="CartItem" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                        <Template Context="c">
+                            <div class="gw2-icon-wrap">
+                                @if (!string.IsNullOrEmpty(c.IconUrl))
+                                {
+                                    <img class="gw2-item-icon" src="@c.IconUrl" alt="" loading="lazy" />
+                                }
+                            </div>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="CartItem" Property="Name" Title="Item">
+                        <Template Context="c"><ItemName Name="@c.Name" /></Template>
+                        <FooterTemplate><b>Totals</b></FooterTemplate>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="CartItem" Title="Qty" Width="120px">
+                        <Template Context="c">
+                            <RadzenNumeric TValue="int" Value="@c.Quantity" Min="1" style="width:6.5rem"
+                                           Change="@(v => Cart.SetQuantity(c.ItemId, v))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="CartItem" Title="Cost" Width="140px" TextAlign="TextAlign.Right">
+                        <Template Context="c"><CoinDisplay Copper="@(Line(c.ItemId)?.Cost)" /></Template>
+                        <FooterTemplate>
+                            @if (_plan is not null)
+                            {
+                                <CoinDisplay Copper="@_plan.CartLines.Sum(l => l.Cost ?? 0)" />
+                            }
+                        </FooterTemplate>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="CartItem" Title="Revenue" Width="140px" TextAlign="TextAlign.Right">
+                        <Template Context="c"><CoinDisplay Copper="@(Line(c.ItemId)?.Revenue)" /></Template>
+                        <FooterTemplate>
+                            @if (_plan is not null)
+                            {
+                                <CoinDisplay Copper="@_plan.TotalRevenue" />
+                            }
+                        </FooterTemplate>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="CartItem" Title="Profit" Width="140px" TextAlign="TextAlign.Right">
+                        <Template Context="c">
+                            @{ var line = Line(c.ItemId); }
+                            <span class="@(line?.Profit > 0 ? "profit-pos" : line?.Profit < 0 ? "profit-neg" : "")">
+                                <CoinDisplay Copper="@(line?.Profit)" />
+                            </span>
+                        </Template>
+                        <FooterTemplate>
+                            @if (_plan is not null)
+                            {
+                                <span class="@(_plan.TotalProfit > 0 ? "profit-pos" : _plan.TotalProfit < 0 ? "profit-neg" : "")">
+                                    <CoinDisplay Copper="@_plan.TotalProfit" />
+                                </span>
+                            }
+                        </FooterTemplate>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="CartItem" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                        <Template Context="c">
+                            <RadzenButton Icon="close" Size="ButtonSize.ExtraSmall" Variant="Variant.Text"
+                                          ButtonStyle="ButtonStyle.Danger" Click="@(() => Cart.Remove(c.ItemId))" title="Remove" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+
+        @if (_busy)
+        {
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenProgressBarCircular Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+                <RadzenText TextStyle="TextStyle.Body2">Building plan…</RadzenText>
+            </RadzenStack>
+        }
+        else if (_plan is not null)
+        {
+            <RadzenCard>
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-mb-2">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Shopping list</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">total <CoinDisplay Copper="@_plan.TotalBuyCost" /></RadzenText>
+                </RadzenStack>
+
+                @if (_plan.Shopping.Count == 0)
+                {
+                    <RadzenText TextStyle="TextStyle.Body2">Nothing to buy — everything is crafted from items you'll craft.</RadzenText>
+                }
+                @foreach (var group in _plan.Shopping.GroupBy(s => s.Source))
+                {
+                    <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-2">
+                        @(group.Key == BuySource.Vendor ? "From a vendor" : "Trading post")
+                    </RadzenText>
+                    <RadzenDataGrid Data="@group.ToList()" TItem="ShoppingLine" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ShoppingLine" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                                <Template Context="s">
+                                    <div class="gw2-icon-wrap">
+                                        @if (!string.IsNullOrEmpty(s.IconUrl))
+                                        {
+                                            <img class="gw2-item-icon" src="@s.IconUrl" alt="" loading="lazy" />
+                                        }
+                                    </div>
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShoppingLine" Property="Quantity" Title="Qty" Width="90px" TextAlign="TextAlign.Right">
+                                <Template Context="s">@s.Quantity.ToString("N0")</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShoppingLine" Property="Name" Title="Item">
+                                <Template Context="s"><ItemName Name="@s.Name" /></Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShoppingLine" Property="UnitPrice" Title="Unit" Width="130px" TextAlign="TextAlign.Right">
+                                <Template Context="s"><CoinDisplay Copper="@s.UnitPrice" /></Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShoppingLine" Property="TotalPrice" Title="Total" Width="140px" TextAlign="TextAlign.Right">
+                                <Template Context="s"><CoinDisplay Copper="@s.TotalPrice" /></Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                }
+            </RadzenCard>
+
+            <RadzenCard>
+                <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Crafting steps</RadzenText>
+                @if (_plan.Steps.Count == 0)
+                {
+                    <RadzenText TextStyle="TextStyle.Body2">No crafting needed.</RadzenText>
+                }
+                @foreach (var group in _plan.Steps.GroupBy(s => s.Discipline))
+                {
+                    <RadzenText TextStyle="TextStyle.Subtitle2" class="rz-mt-2">
+                        @(string.IsNullOrEmpty(group.Key) ? "Any discipline" : group.Key)
+                    </RadzenText>
+                    @foreach (var step in group)
+                    {
+                        <div class="craft-step-row @(step.IsFinal ? "craft-step-final" : "")">
+                            @if (!string.IsNullOrEmpty(step.IconUrl))
+                            {
+                                <img class="gw2-tree-icon" src="@step.IconUrl" alt="" loading="lazy" />
+                            }
+                            <span class="craft-step-qty">@step.Quantity.ToString("N0")×</span>
+                            <ItemName Name="@step.Name" />
+                            @if (step.IsFinal)
+                            {
+                                <RadzenBadge Text="Final" BadgeStyle="BadgeStyle.Success" />
+                            }
+                            else
+                            {
+                                <RadzenBadge Text="Intermediate" BadgeStyle="BadgeStyle.Light" />
+                            }
+                            @if (step.OutputCount > 1)
+                            {
+                                <span class="craft-step-note">(@step.Crafts crafts × @step.OutputCount)</span>
+                            }
+                        </div>
+                    }
+                }
+            </RadzenCard>
+        }
+    }
+</RadzenStack>
+
+@code {
+    private PricingMode _mode = PricingMode.InstantBuy;
+    private CraftPlan? _plan;
+    private bool _busy;
+
+    private CartLine? Line(int itemId) => _plan?.CartLines.FirstOrDefault(l => l.ItemId == itemId);
+
+    protected override void OnInitialized() => Cart.OnChange += OnCartChanged;
+
+    public void Dispose() => Cart.OnChange -= OnCartChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await Generate();
+    }
+
+    private void OnCartChanged() => _ = InvokeAsync(Generate);
+
+    private async Task Generate()
+    {
+        if (Cart.Count == 0)
+        {
+            _plan = null;
+            StateHasChanged();
+            return;
+        }
+
+        _busy = true;
+        StateHasChanged();
+        _plan = await ProfitSvc.BuildPlanAsync(Cart.ToQuantities(), _mode);
+        _busy = false;
+        StateHasChanged();
+    }
+}

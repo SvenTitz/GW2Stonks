@@ -1,7 +1,11 @@
 @page "/profit"
+@implements IDisposable
 @inject ProfitService ProfitSvc
 @inject VolumeService VolumeSvc
+@inject CartService Cart
+@inject ProfitFilterState State
 @inject NotificationService Notifications
+@inject NavigationManager Nav
 
 <PageTitle>Craft profit</PageTitle>
 
@@ -9,7 +13,7 @@
     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="1rem">
         <RadzenText TextStyle="TextStyle.H4" class="rz-m-0">Craft profit</RadzenText>
         <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Buy materials via</RadzenText>
-        <RadzenSelectBar @bind-Value="_mode" @bind-Value:after="Reload" TValue="PricingMode" Size="ButtonSize.Small">
+        <RadzenSelectBar @bind-Value="State.Mode" @bind-Value:after="Reload" TValue="PricingMode" Size="ButtonSize.Small">
             <Items>
                 <RadzenSelectBarItem Text="Instant buy" Value="PricingMode.InstantBuy" />
                 <RadzenSelectBarItem Text="Buy orders" Value="PricingMode.BuyOrders" />
@@ -25,16 +29,49 @@
                       IsBusy="@_volumeBusy" BusyText="Refreshing…" Click="@RefreshVolume" />
     </RadzenStack>
 
+    <RadzenCard Variant="Variant.Outlined" class="rz-p-3">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem">
+            <RadzenFormField Text="Search name" Variant="Variant.Outlined">
+                <RadzenTextBox @bind-Value="State.NameFilter" @bind-Value:after="ApplyFilters" style="width:11rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Disciplines" Variant="Variant.Outlined">
+                <RadzenDropDown @bind-Value="State.SelectedDisciplines" @bind-Value:after="ApplyFilters" Data="@_disciplines"
+                                Multiple="true" AllowClear="true" Chips="true" style="width:16rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Types" Variant="Variant.Outlined">
+                <RadzenDropDown @bind-Value="State.SelectedTypes" @bind-Value:after="ApplyFilters" Data="@_types"
+                                Multiple="true" AllowClear="true" Chips="true" style="width:14rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Min profit (copper)" Variant="Variant.Outlined">
+                <RadzenNumeric @bind-Value="State.MinProfitCopper" @bind-Value:after="ApplyFilters" Min="0" style="width:8rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Min margin %" Variant="Variant.Outlined">
+                <RadzenNumeric @bind-Value="State.MinMargin" @bind-Value:after="ApplyFilters" Min="0" style="width:6.5rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Min sold/day" Variant="Variant.Outlined">
+                <RadzenNumeric @bind-Value="State.MinSoldPerDay" @bind-Value:after="ApplyFilters" Min="0" style="width:6.5rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Max sell-through (d)" Variant="Variant.Outlined">
+                <RadzenNumeric @bind-Value="State.MaxSellThrough" @bind-Value:after="ApplyFilters" Min="0" style="width:6.5rem" />
+            </RadzenFormField>
+            <RadzenFormField Text="Min relists" Variant="Variant.Outlined">
+                <RadzenNumeric @bind-Value="State.MinRelists" @bind-Value:after="ApplyFilters" Min="0" style="width:6.5rem" />
+            </RadzenFormField>
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.4rem">
+                <RadzenCheckBox @bind-Value="State.ProfitableOnly" @bind-Value:after="ApplyFilters" Name="prof" />
+                <RadzenLabel Text="Profitable only" Component="prof" />
+            </RadzenStack>
+        </RadzenStack>
+    </RadzenCard>
+
     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem">
-        <RadzenTextBox @bind-Value="_nameFilter" @bind-Value:after="ApplyFilters" Placeholder="Search name…" style="width:14rem" />
-        <RadzenDropDown @bind-Value="_discipline" @bind-Value:after="ApplyFilters" Data="@_disciplines" AllowClear="true"
-                        Placeholder="Discipline" style="width:12rem" />
-        <RadzenDropDown @bind-Value="_type" @bind-Value:after="ApplyFilters" Data="@_types" AllowClear="true"
-                        Placeholder="Type" style="width:12rem" />
-        <RadzenCheckBox @bind-Value="_profitableOnly" @bind-Value:after="ApplyFilters" Name="prof" />
-        <RadzenLabel Text="Profitable only" Component="prof" />
-        <RadzenLabel Text="Min sold/day" Component="minsold" />
-        <RadzenNumeric @bind-Value="_minSoldPerDay" @bind-Value:after="ApplyFilters" Name="minsold" Min="0" style="width:8rem" />
+        <RadzenFormField Text="Craft % of daily sales" Variant="Variant.Outlined">
+            <RadzenNumeric @bind-Value="State.FillPercent" @bind-Value:after="OnFillPercentChanged" Min="1" Max="100" style="width:6rem" />
+        </RadzenFormField>
+        <RadzenButton Text="@($"Fill cart from {_view.Count} shown")" Icon="add_shopping_cart"
+                      Click="@FillCart" Disabled="@(_loading || _view.Count == 0)" />
+        <RadzenButton Text="@($"Cart ({Cart.Count})")" Icon="shopping_cart" ButtonStyle="ButtonStyle.Secondary"
+                      Click="@(() => Nav.NavigateTo("planner"))" />
     </RadzenStack>
 
     @if (_loading)
@@ -46,7 +83,7 @@
     }
     else
     {
-        <RadzenDataGrid TItem="ProfitRow" Data="@_view" AllowPaging="true" PageSize="50" AllowSorting="true"
+        <RadzenDataGrid @ref="_grid" TItem="ProfitRow" Data="@_view" AllowPaging="true" PageSize="50" AllowSorting="true"
                         ExpandMode="DataGridExpandMode.Single" RowExpand="@OnRowExpand"
                         PagerHorizontalAlign="HorizontalAlign.Center" ShowPagingSummary="true" AllowColumnResize="true">
             <Template Context="row">
@@ -73,16 +110,18 @@
                         </div>
                     </Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="Name" Title="Name" MinWidth="200px" />
-                <RadzenDataGridColumn TItem="ProfitRow" Property="Disciplines" Title="Discipline" Width="160px" />
-                <RadzenDataGridColumn TItem="ProfitRow" Property="MinRating" Title="Rating" Width="90px" />
-                <RadzenDataGridColumn TItem="ProfitRow" Property="CraftCost" Title="Craft cost" Width="140px" TextAlign="TextAlign.Right">
+                <RadzenDataGridColumn TItem="ProfitRow" Property="Name" Title="Name" MinWidth="200px">
+                    <Template Context="row"><ItemName Name="@row.Name" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ProfitRow" Property="Disciplines" Title="Discipline" Width="150px" />
+                <RadzenDataGridColumn TItem="ProfitRow" Property="MinRating" Title="Rating" Width="85px" />
+                <RadzenDataGridColumn TItem="ProfitRow" Property="CraftCost" Title="Craft cost" Width="135px" TextAlign="TextAlign.Right">
                     <Template Context="row"><CoinDisplay Copper="@row.CraftCost" /></Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="NetSell" Title="Net sell" Width="140px" TextAlign="TextAlign.Right">
+                <RadzenDataGridColumn TItem="ProfitRow" Property="NetSell" Title="Net sell" Width="135px" TextAlign="TextAlign.Right">
                     <Template Context="row"><CoinDisplay Copper="@row.NetSell" /></Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="Profit" Title="Profit" Width="140px"
+                <RadzenDataGridColumn TItem="ProfitRow" Property="Profit" Title="Profit" Width="135px"
                                       SortOrder="SortOrder.Descending" TextAlign="TextAlign.Right">
                     <Template Context="row">
                         <span class="@(row.Profit > 0 ? "profit-pos" : row.Profit < 0 ? "profit-neg" : "")">
@@ -90,17 +129,41 @@
                         </span>
                     </Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="Margin" Title="Margin" Width="100px" TextAlign="TextAlign.Right">
+                <RadzenDataGridColumn TItem="ProfitRow" Property="Margin" Title="Margin" Width="95px" TextAlign="TextAlign.Right">
                     <Template Context="row">@(row.Margin is null ? "—" : row.Margin.Value.ToString("0.#") + "%")</Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="SoldPerDay" Title="Sold/day" Width="110px" TextAlign="TextAlign.Right">
+                <RadzenDataGridColumn TItem="ProfitRow" Property="Relists" Title="Relists" Width="90px" TextAlign="TextAlign.Right">
+                    <Template Context="row">@(row.Relists is null ? "—" : row.Relists.Value.ToString("N0"))</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ProfitRow" Property="SoldPerDay" Title="Sold/day" Width="105px" TextAlign="TextAlign.Right">
                     <Template Context="row">@(row.SoldPerDay is null ? "—" : row.SoldPerDay.Value.ToString("N0"))</Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="SellThroughDays" Title="Sell-through" Width="120px" TextAlign="TextAlign.Right">
+                <RadzenDataGridColumn TItem="ProfitRow" Property="PossibleDailyProfit" Title="Profit/day" Width="135px" TextAlign="TextAlign.Right">
+                    <Template Context="row"><CoinDisplay Copper="@row.PossibleDailyProfit" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ProfitRow" Property="SellThroughDays" Title="Sell-through" Width="115px" TextAlign="TextAlign.Right">
                     <Template Context="row">@(row.SellThroughDays is null ? "—" : row.SellThroughDays.Value.ToString("0.#") + " d")</Template>
                 </RadzenDataGridColumn>
-                <RadzenDataGridColumn TItem="ProfitRow" Property="BuyPrice" Title="Buy (ref)" Width="130px" TextAlign="TextAlign.Right">
+                <RadzenDataGridColumn TItem="ProfitRow" Property="BuyPrice" Title="Buy (ref)" Width="125px" TextAlign="TextAlign.Right">
                     <Template Context="row"><CoinDisplay Copper="@row.BuyPrice" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ProfitRow" Title="Cart" Sortable="false" Filterable="false" Width="120px" TextAlign="TextAlign.Center">
+                    <Template Context="row">
+                        @{ var q = Cart.GetQuantity(row.Id); }
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                                     JustifyContent="JustifyContent.Center" Gap="0.3rem">
+                            @if (q > 0)
+                            {
+                                <RadzenButton Icon="remove" Size="ButtonSize.ExtraSmall" Variant="Variant.Flat"
+                                              ButtonStyle="ButtonStyle.Danger" Click="@(() => Cart.SetQuantity(row.Id, q - 1))"
+                                              title="Remove one" />
+                                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@q</RadzenText>
+                            }
+                            <RadzenButton Icon="add" Size="ButtonSize.ExtraSmall" Variant="Variant.Flat"
+                                          ButtonStyle="ButtonStyle.Primary" Click="@(() => Cart.Add(row.Id, row.Name, row.IconUrl, 1))"
+                                          title="Add one" />
+                        </RadzenStack>
+                    </Template>
                 </RadzenDataGridColumn>
             </Columns>
         </RadzenDataGrid>
@@ -108,7 +171,7 @@
 </RadzenStack>
 
 @code {
-    private PricingMode _mode = PricingMode.InstantBuy;
+    private RadzenDataGrid<ProfitRow>? _grid;
     private bool _loading = true;
 
     private IReadOnlyList<ProfitRow> _rows = Array.Empty<ProfitRow>();
@@ -117,13 +180,13 @@
 
     private List<string> _disciplines = new();
     private List<string> _types = new();
-
-    private string? _nameFilter;
-    private string? _discipline;
-    private string? _type;
-    private bool _profitableOnly = true;
-    private int _minSoldPerDay;
     private bool _volumeBusy;
+
+    protected override void OnInitialized() => Cart.OnChange += OnCartChanged;
+
+    public void Dispose() => Cart.OnChange -= OnCartChanged;
+
+    private void OnCartChanged() => InvokeAsync(StateHasChanged);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -136,35 +199,71 @@
         _loading = true;
         StateHasChanged();
 
-        _rows = await ProfitSvc.GetRowsAsync(_mode);
+        _rows = await ProfitSvc.GetRowsAsync(State.Mode);
         _trees.Clear();
         _disciplines = _rows
             .SelectMany(r => r.Disciplines.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             .Distinct().OrderBy(d => d).ToList();
         _types = _rows.Select(r => r.Type).Where(t => !string.IsNullOrEmpty(t)).Distinct().OrderBy(t => t).ToList();
 
+        RecomputeDailyProfit();
         ApplyFilters();
         _loading = false;
         StateHasChanged();
+    }
+
+    private int FillQty(ProfitRow r) =>
+        r.SoldPerDay is int s && s > 0 ? (int)Math.Round(s * State.FillPercent / 100.0) : 0;
+
+    private void RecomputeDailyProfit()
+    {
+        foreach (var r in _rows)
+            r.PossibleDailyProfit = r.Profit is int p ? FillQty(r) * p : null;
+    }
+
+    private void OnFillPercentChanged()
+    {
+        RecomputeDailyProfit();
+        ApplyFilters();
     }
 
     private void ApplyFilters()
     {
         IEnumerable<ProfitRow> q = _rows;
 
-        if (_profitableOnly)
+        if (State.ProfitableOnly)
             q = q.Where(r => r.Profit > 0);
-        if (!string.IsNullOrWhiteSpace(_nameFilter))
-            q = q.Where(r => r.Name.Contains(_nameFilter, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrEmpty(_discipline))
-            q = q.Where(r => r.Disciplines.Contains(_discipline, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrEmpty(_type))
-            q = q.Where(r => r.Type == _type);
-        if (_minSoldPerDay > 0)
-            q = q.Where(r => r.SoldPerDay >= _minSoldPerDay);
+        if (!string.IsNullOrWhiteSpace(State.NameFilter))
+            q = q.Where(r => r.Name.Contains(State.NameFilter, StringComparison.OrdinalIgnoreCase));
+        if (State.SelectedDisciplines.Any())
+            q = q.Where(r => State.SelectedDisciplines.Any(d => r.Disciplines.Contains(d, StringComparison.OrdinalIgnoreCase)));
+        if (State.SelectedTypes.Any())
+            q = q.Where(r => State.SelectedTypes.Contains(r.Type));
+        if (State.MinProfitCopper > 0)
+            q = q.Where(r => r.Profit >= State.MinProfitCopper);
+        if (State.MinMargin > 0)
+            q = q.Where(r => r.Margin >= State.MinMargin);
+        if (State.MinSoldPerDay > 0)
+            q = q.Where(r => r.SoldPerDay >= State.MinSoldPerDay);
+        if (State.MaxSellThrough > 0)
+            q = q.Where(r => r.SellThroughDays != null && r.SellThroughDays <= State.MaxSellThrough);
+        if (State.MinRelists > 0)
+            q = q.Where(r => r.Relists >= State.MinRelists);
 
         _view = q.OrderByDescending(r => r.Profit).ToList();
         StateHasChanged();
+    }
+
+    private void FillCart()
+    {
+        var added = 0;
+        foreach (var r in _view)
+        {
+            var qty = FillQty(r);
+            if (qty > 0) { Cart.Add(r.Id, r.Name, r.IconUrl, qty); added++; }
+        }
+        Notifications.Notify(NotificationSeverity.Success, "Cart filled",
+            $"Added {added} item(s) at {State.FillPercent}% of daily sales", 4000);
     }
 
     private async Task RefreshVolume()
@@ -175,7 +274,7 @@
         try
         {
             await Task.Run(() => VolumeSvc.RefreshVolumesAsync());
-            await Reload(); // rebuilds the snapshot, which picks up the new volume data
+            await Reload();
             Notifications.Notify(NotificationSeverity.Success, "Volume refreshed");
         }
         catch (Exception ex)
@@ -192,7 +291,7 @@
     private async Task OnRowExpand(ProfitRow row)
     {
         if (_trees.ContainsKey(row.Id)) return;
-        var tree = await ProfitSvc.BuildTreeAsync(row.Id, _mode);
+        var tree = await ProfitSvc.BuildTreeAsync(row.Id, State.Mode);
         _trees[row.Id] = tree;
         StateHasChanged();
     }

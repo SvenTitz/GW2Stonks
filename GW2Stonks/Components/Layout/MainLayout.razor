@@ -5,9 +5,10 @@
 <RadzenLayout>
     <RadzenHeader>
         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
-                     Gap="0.5rem" class="rz-px-3 rz-py-2">
+                     Gap="0.5rem" class="rz-px-3 rz-py-2" Style="width: 100%">
             <RadzenSidebarToggle Click="@(() => _sidebarExpanded = !_sidebarExpanded)" />
             <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">GW2 Stonks</RadzenText>
+            <RadzenAppearanceToggle class="rz-ml-auto" />
         </RadzenStack>
     </RadzenHeader>
     <RadzenSidebar @bind-Expanded="_sidebarExpanded">
@@ -15,6 +16,7 @@
             <RadzenPanelMenuItem Text="Home" Icon="home" Path="/" />
             <RadzenPanelMenuItem Text="Items" Icon="inventory_2" Path="items" />
             <RadzenPanelMenuItem Text="Craft profit" Icon="trending_up" Path="profit" />
+            <RadzenPanelMenuItem Text="Planner" Icon="shopping_cart" Path="planner" />
         </RadzenPanelMenu>
     </RadzenSidebar>
     <RadzenBody>

@@ -68,6 +68,8 @@ namespace GW2Stonks
 
             builder.Services.AddScoped<Gw2SyncService>();
             builder.Services.AddSingleton<ProfitService>();
+            builder.Services.AddSingleton<CartService>();
+            builder.Services.AddSingleton<ProfitFilterState>();
             builder.Services.AddHostedService<PriceRefreshBackgroundService>();
 
             // datawars2.ie volume source (separate host): typed client + cached-volume refresh.
@@ -134,6 +136,14 @@ namespace GW2Stonks
             if (args.Length > 0 && string.Equals(args[0], "volume", StringComparison.OrdinalIgnoreCase))
             {
                 await RunVolumeCliAsync(app.Services, args.Length > 1 ? args[1] : "refresh");
+                return;
+            }
+
+            // Build a craft plan (shopping list + crafting steps) for a cart:
+            //   dotnet run -- plan <itemId:qty> [<itemId:qty> ...]
+            if (args.Length > 0 && string.Equals(args[0], "plan", StringComparison.OrdinalIgnoreCase))
+            {
+                await RunPlanCliAsync(app.Services, args.Skip(1));
                 return;
             }
 
@@ -273,6 +283,45 @@ namespace GW2Stonks
             var sellThrough = v.SoldPerDay > 0 ? (v.SupplyNow / (double)v.SoldPerDay).ToString("0.#") + " days" : "—";
             Console.WriteLine($"{item?.Name} (#{id}): sold/day={v.SoldPerDay:N0}, bought/day={v.BoughtPerDay:N0}, " +
                 $"supply={v.SupplyNow:N0}, demand={v.DemandNow:N0}, sell-through={sellThrough}");
+        }
+
+        private static async Task RunPlanCliAsync(IServiceProvider services, IEnumerable<string> specs)
+        {
+            var cart = new Dictionary<int, int>();
+            foreach (var s in specs)
+            {
+                var parts = s.Split(':');
+                if (parts.Length == 2 && int.TryParse(parts[0], out var id) && int.TryParse(parts[1], out var qty) && qty > 0)
+                    cart[id] = qty;
+            }
+            if (cart.Count == 0)
+            {
+                Console.WriteLine("Usage: dotnet run -- plan <itemId:qty> [<itemId:qty> ...]");
+                return;
+            }
+
+            using var scope = services.CreateScope();
+            var profit = scope.ServiceProvider.GetRequiredService<ProfitService>();
+            var plan = await profit.BuildPlanAsync(cart, PricingMode.InstantBuy);
+
+            Console.WriteLine();
+            Console.WriteLine("=== SHOPPING LIST ===");
+            foreach (var group in plan.Shopping.GroupBy(s => s.Source))
+            {
+                Console.WriteLine($"-- {group.Key} --");
+                foreach (var line in group)
+                    Console.WriteLine($"  {line.Quantity,7:N0}x {line.Name,-42} {Coin.Format(line.TotalPrice)}");
+            }
+            Console.WriteLine($"Total buy cost: {Coin.Format(plan.TotalBuyCost)}");
+
+            Console.WriteLine();
+            Console.WriteLine("=== CRAFTING STEPS (deepest first) ===");
+            foreach (var group in plan.Steps.GroupBy(s => s.Discipline))
+            {
+                Console.WriteLine($"-- {(string.IsNullOrEmpty(group.Key) ? "(any)" : group.Key)} --");
+                foreach (var step in group)
+                    Console.WriteLine($"  Craft {step.Quantity,6:N0}x {step.Name,-42} ({step.Crafts} craft(s))");
+            }
         }
 
         private static void PrintCraftNode(GW2Stonks.Models.CraftNode node, int depth)

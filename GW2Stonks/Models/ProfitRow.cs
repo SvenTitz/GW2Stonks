@@ -27,8 +27,20 @@ public sealed class ProfitRow
     /// <summary>Profit as a percentage of craft cost.</summary>
     public double? Margin { get; set; }
 
+    /// <summary>
+    /// How many times you could relist at the current price (each costs the 5% listing fee)
+    /// before the accumulated fees wipe out the profit. Higher = more resilient to slow sales.
+    /// </summary>
+    public int? Relists { get; set; }
+
     /// <summary>True when crafting is cheaper than simply buying the item.</summary>
     public bool CraftCheaperThanBuy { get; set; }
+
+    /// <summary>
+    /// Expected profit/day from this item: round(sold/day × craft-%) × profit. Computed by the
+    /// page since it depends on the current "craft % of daily sales" setting.
+    /// </summary>
+    public int? PossibleDailyProfit { get; set; }
 
     /// <summary>Estimated units bought off sellers per day (liquidity). Null if not cached yet.</summary>
     public int? SoldPerDay { get; set; }

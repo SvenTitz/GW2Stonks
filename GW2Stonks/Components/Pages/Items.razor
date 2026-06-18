@@ -57,7 +57,9 @@
                     </div>
                 </Template>
             </RadzenDataGridColumn>
-            <RadzenDataGridColumn TItem="ItemListRow" Property="Name" Title="Name" MinWidth="200px" MaxWidth="300px" />
+            <RadzenDataGridColumn TItem="ItemListRow" Property="Name" Title="Name" MinWidth="200px" MaxWidth="300px">
+                <Template Context="row"><ItemName Name="@row.Name" /></Template>
+            </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="ItemListRow" Property="Type" Title="Type" Width="150px" />
             <RadzenDataGridColumn TItem="ItemListRow" Property="Rarity" Title="Rarity" Width="120px" />
             <RadzenDataGridColumn TItem="ItemListRow" Property="Level" Title="Lvl" Width="80px" />

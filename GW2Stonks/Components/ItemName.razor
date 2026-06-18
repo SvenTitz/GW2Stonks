@@ -1,0 +1,30 @@
+@* An item name rendered as a GW2 wiki link, with a button to copy the name to the clipboard. *@
+@inject IJSRuntime JS
+@inject NotificationService Notifications
+
+<span class="item-name">
+    <a href="@WikiUrl" target="_blank" rel="noopener noreferrer" class="item-name-link">@Name</a>
+    <RadzenButton Icon="content_copy" Size="ButtonSize.ExtraSmall" Variant="Variant.Text"
+                  ButtonStyle="ButtonStyle.Light" class="item-copy-btn" Click="@Copy"
+                  title="Copy name to clipboard" />
+</span>
+
+@code {
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+
+    private string WikiUrl =>
+        "https://wiki.guildwars2.com/wiki/" + Uri.EscapeDataString(Name).Replace("%20", "_");
+
+    private async Task Copy()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("gw2Copy", Name);
+            Notifications.Notify(NotificationSeverity.Info, "Copied", Name, 1500);
+        }
+        catch
+        {
+            Notifications.Notify(NotificationSeverity.Warning, "Copy failed", "Clipboard unavailable", 2500);
+        }
+    }
+}

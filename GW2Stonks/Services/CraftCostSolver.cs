@@ -18,6 +18,7 @@ public sealed class CraftCostSolver
     private readonly IReadOnlyDictionary<int, (int Buy, int Sell)> _prices;
     private readonly IReadOnlyDictionary<int, List<RecipeInfo>> _recipesByOutput;
     private readonly IReadOnlyDictionary<int, int> _vendor;
+    private readonly IReadOnlySet<int> _timeGated;
     private readonly PricingMode _mode;
 
     private readonly Dictionary<int, CostResult> _memo = new();
@@ -27,11 +28,13 @@ public sealed class CraftCostSolver
         IReadOnlyDictionary<int, (int Buy, int Sell)> prices,
         IReadOnlyDictionary<int, List<RecipeInfo>> recipesByOutput,
         IReadOnlyDictionary<int, int> vendor,
+        IReadOnlySet<int> timeGated,
         PricingMode mode)
     {
         _prices = prices;
         _recipesByOutput = recipesByOutput;
         _vendor = vendor;
+        _timeGated = timeGated;
         _mode = mode;
     }
 
@@ -89,11 +92,14 @@ public sealed class CraftCostSolver
         decimal? bestCraft = null;
         int? bestRecipe = null;
 
-        if (_recipesByOutput.TryGetValue(itemId, out var recipes))
+        // Time-gated daily materials are never crafted (always bought), and a recipe that directly
+        // requires one is disallowed — so its output also becomes buy-only.
+        if (!_timeGated.Contains(itemId) && _recipesByOutput.TryGetValue(itemId, out var recipes))
         {
             foreach (var r in recipes)
             {
                 if (r.OutputCount <= 0) continue;
+                if (r.Ingredients.Any(g => _timeGated.Contains(g.ItemId))) continue;
 
                 decimal total = 0;
                 bool feasible = true;
