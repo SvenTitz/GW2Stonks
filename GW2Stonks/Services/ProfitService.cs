@@ -47,7 +47,8 @@ public sealed class ProfitService
     /// with batch-size rounding) and crafting steps (all "craft" nodes, deepest first), for one mode.
     /// </summary>
     public async Task<CraftPlan> BuildPlanAsync(
-        IReadOnlyDictionary<int, int> cart, PricingMode mode, CancellationToken ct = default)
+        IReadOnlyDictionary<int, int> cart, PricingMode mode,
+        IReadOnlyDictionary<int, int>? owned = null, CancellationToken ct = default)
     {
         var snap = await EnsureCurrentAsync(ct);
         var solver = mode == PricingMode.InstantBuy ? snap.InstantBuy : snap.BuyOrders;
@@ -57,11 +58,16 @@ public sealed class ProfitService
         var craftRecipe = new Dictionary<int, int>();
         var craftDepth = new Dictionary<int, int>();
 
+        // Mutable pool of owned stock drawn down during explosion (cart items themselves are
+        // always crafted in full; only their ingredients/intermediates are covered by stock).
+        var available = owned is null ? new Dictionary<int, int>() : new Dictionary<int, int>(owned);
+        var ownedUsed = new Dictionary<int, int>();
+
         lock (snap.TreeLock)
         {
             foreach (var (itemId, qty) in cart)
                 if (qty > 0)
-                    Explode(itemId, qty, 0, true, solver, snap, buyQty, craftUnits, craftRecipe, craftDepth, new HashSet<int>());
+                    Explode(itemId, qty, 0, true, solver, snap, buyQty, craftUnits, craftRecipe, craftDepth, available, ownedUsed, new HashSet<int>());
         }
 
         var plan = new CraftPlan();
@@ -139,6 +145,24 @@ public sealed class ProfitService
         plan.CartLines = plan.CartLines.OrderBy(l => l.Name).ToList();
         plan.TotalRevenue = plan.CartLines.Sum(l => l.Revenue ?? 0);
         plan.TotalProfit = plan.CartLines.Sum(l => l.Profit ?? 0);
+
+        // Itemised owned stock that was applied: each used unit saved its cheapest acquisition cost.
+        foreach (var (itemId, used) in ownedUsed)
+        {
+            snap.Items.TryGetValue(itemId, out var meta);
+            var best = solver.Resolve(itemId).Best;
+            plan.OwnedUsed.Add(new OwnedUsedLine
+            {
+                ItemId = itemId,
+                Name = meta?.Name ?? $"Item {itemId}",
+                IconUrl = meta?.Icon,
+                Quantity = used,
+                Value = best is null ? null : Round(best.Value * used)
+            });
+        }
+        plan.OwnedUsed = plan.OwnedUsed.OrderByDescending(l => l.Value ?? 0).ThenBy(l => l.Name).ToList();
+        plan.OwnedTypesApplied = plan.OwnedUsed.Count;
+        plan.OwnedSavings = plan.OwnedUsed.Sum(l => l.Value ?? 0);
         return plan;
     }
 
@@ -369,8 +393,19 @@ public sealed class ProfitService
         int itemId, int qty, int depth, bool forceCraft,
         CraftCostSolver solver, Snapshot snap,
         Dictionary<int, int> buyQty, Dictionary<int, int> craftUnits,
-        Dictionary<int, int> craftRecipe, Dictionary<int, int> craftDepth, HashSet<int> path)
+        Dictionary<int, int> craftRecipe, Dictionary<int, int> craftDepth,
+        Dictionary<int, int> available, Dictionary<int, int> ownedUsed, HashSet<int> path)
     {
+        // Draw down owned stock for ingredients/intermediates (never for the forced cart roots).
+        if (!forceCraft && available.TryGetValue(itemId, out var have) && have > 0)
+        {
+            var use = Math.Min(have, qty);
+            available[itemId] = have - use;
+            ownedUsed[itemId] = ownedUsed.GetValueOrDefault(itemId) + use;
+            qty -= use;
+            if (qty <= 0) return;
+        }
+
         var res = solver.Resolve(itemId);
         var willCraft = (forceCraft || res.Source == CraftCostSolver.Source.Craft)
             && res.Craft is not null
@@ -395,7 +430,7 @@ public sealed class ProfitService
 
         path.Add(itemId);
         foreach (var (ingId, count) in recipe.Ingredients)
-            Explode(ingId, crafts * count, depth + 1, false, solver, snap, buyQty, craftUnits, craftRecipe, craftDepth, path);
+            Explode(ingId, crafts * count, depth + 1, false, solver, snap, buyQty, craftUnits, craftRecipe, craftDepth, available, ownedUsed, path);
         path.Remove(itemId);
     }
 

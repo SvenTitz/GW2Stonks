@@ -1,6 +1,7 @@
 @page "/planner"
 @inject CartService Cart
 @inject ProfitService ProfitSvc
+@inject AccountService Account
 @implements IDisposable
 
 <PageTitle>Planner</PageTitle>
@@ -17,6 +18,14 @@
         </RadzenSelectBar>
         <RadzenButton Text="Clear cart" Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
                       Click="@(() => Cart.Clear())" Disabled="@(Cart.Count == 0)" />
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.4rem" class="rz-ml-auto">
+            <RadzenCheckBox @bind-Value="_useStock" @bind-Value:after="Generate" TValue="bool" Name="useStock" />
+            <RadzenLabel Text="Subtract items I own" Component="useStock" />
+            @if (_useStock && _ownedTypes == 0)
+            {
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">— none cached, <a href="settings">refresh on Settings</a></RadzenText>
+            }
+        </RadzenStack>
     </RadzenStack>
 
     @if (Cart.Count == 0)
@@ -108,6 +117,12 @@
                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-mb-2">
                     <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Shopping list</RadzenText>
                     <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">total <CoinDisplay Copper="@_plan.TotalBuyCost" /></RadzenText>
+                    @if (_plan.OwnedTypesApplied > 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                            · owned stock saved <CoinDisplay Copper="@_plan.OwnedSavings" /> (@_plan.OwnedTypesApplied type@(_plan.OwnedTypesApplied == 1 ? "" : "s"))
+                        </RadzenText>
+                    }
                 </RadzenStack>
 
                 @if (_plan.Shopping.Count == 0)
@@ -147,6 +162,40 @@
                     </RadzenDataGrid>
                 }
             </RadzenCard>
+
+            @if (_plan.OwnedUsed.Count > 0)
+            {
+                <RadzenCard>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" class="rz-mb-2">
+                        <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">From your stock</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">@_plan.OwnedUsed.Count type@(_plan.OwnedUsed.Count == 1 ? "" : "s") · saved <CoinDisplay Copper="@_plan.OwnedSavings" /></RadzenText>
+                    </RadzenStack>
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-2">Materials you already own that were subtracted from the shopping list.</RadzenText>
+                    <RadzenDataGrid Data="@_plan.OwnedUsed" TItem="OwnedUsedLine" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="OwnedUsedLine" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                                <Template Context="o">
+                                    <div class="gw2-icon-wrap">
+                                        @if (!string.IsNullOrEmpty(o.IconUrl))
+                                        {
+                                            <img class="gw2-item-icon" src="@o.IconUrl" alt="" loading="lazy" />
+                                        }
+                                    </div>
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="OwnedUsedLine" Property="Quantity" Title="Used" Width="90px" TextAlign="TextAlign.Right">
+                                <Template Context="o">@o.Quantity.ToString("N0")</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="OwnedUsedLine" Property="Name" Title="Item">
+                                <Template Context="o"><ItemName Name="@o.Name" /></Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="OwnedUsedLine" Property="Value" Title="Value saved" Width="140px" TextAlign="TextAlign.Right">
+                                <Template Context="o"><CoinDisplay Copper="@o.Value" /></Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            }
 
             <RadzenCard>
                 <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Crafting steps</RadzenText>
@@ -192,6 +241,8 @@
     private PricingMode _mode = PricingMode.InstantBuy;
     private CraftPlan? _plan;
     private bool _busy;
+    private bool _useStock = true;
+    private int _ownedTypes;
 
     private CartLine? Line(int itemId) => _plan?.CartLines.FirstOrDefault(l => l.ItemId == itemId);
 
@@ -201,7 +252,11 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) await Generate();
+        if (firstRender)
+        {
+            _ownedTypes = (await Account.GetStatusAsync()).OwnedItemTypes;
+            await Generate();
+        }
     }
 
     private void OnCartChanged() => _ = InvokeAsync(Generate);
@@ -217,7 +272,8 @@
 
         _busy = true;
         StateHasChanged();
-        _plan = await ProfitSvc.BuildPlanAsync(Cart.ToQuantities(), _mode);
+        var owned = _useStock ? await Account.GetOwnedAsync() : null;
+        _plan = await ProfitSvc.BuildPlanAsync(Cart.ToQuantities(), _mode, owned);
         _busy = false;
         StateHasChanged();
     }

@@ -14,6 +14,8 @@ public class AppDbContext : DbContext
     public DbSet<Price> Prices => Set<Price>();
     public DbSet<ItemVolume> ItemVolumes => Set<ItemVolume>();
     public DbSet<SyncState> SyncStates => Set<SyncState>();
+    public DbSet<AppSetting> AppSettings => Set<AppSetting>();
+    public DbSet<OwnedItem> OwnedItems => Set<OwnedItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -81,6 +83,19 @@ public class AppDbContext : DbContext
         {
             e.HasKey(s => s.Key);
             e.Property(s => s.Key).HasMaxLength(50);
+        });
+
+        modelBuilder.Entity<AppSetting>(e =>
+        {
+            e.HasKey(s => s.Key);
+            e.Property(s => s.Key).HasMaxLength(64);
+            e.Property(s => s.Value).HasMaxLength(1024);
+        });
+
+        modelBuilder.Entity<OwnedItem>(e =>
+        {
+            e.HasKey(o => o.ItemId);
+            e.Property(o => o.ItemId).ValueGeneratedNever();
         });
     }
 }

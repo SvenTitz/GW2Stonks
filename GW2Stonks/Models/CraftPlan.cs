@@ -55,12 +55,27 @@ public sealed class CartLine
     public int? Profit { get; set; }
 }
 
+/// <summary>One material drawn from owned stock instead of bought/crafted.</summary>
+public sealed class OwnedUsedLine
+{
+    public int ItemId { get; set; }
+    public string Name { get; set; } = "";
+    public string? IconUrl { get; set; }
+
+    /// <summary>Units taken from stock.</summary>
+    public int Quantity { get; set; }
+
+    /// <summary>Copper saved (units × the item's cheapest acquisition cost).</summary>
+    public int? Value { get; set; }
+}
+
 /// <summary>A full craft plan for a cart: what to buy and what to craft.</summary>
 public sealed class CraftPlan
 {
     public List<CartLine> CartLines { get; set; } = new();
     public List<ShoppingLine> Shopping { get; set; } = new();
     public List<CraftStep> Steps { get; set; } = new();
+    public List<OwnedUsedLine> OwnedUsed { get; set; } = new();
 
     /// <summary>Total cost of all materials to buy.</summary>
     public int TotalBuyCost { get; set; }
@@ -70,4 +85,10 @@ public sealed class CraftPlan
 
     /// <summary>TotalRevenue − TotalBuyCost.</summary>
     public int TotalProfit { get; set; }
+
+    /// <summary>Distinct item types drawn from owned stock instead of bought/crafted.</summary>
+    public int OwnedTypesApplied { get; set; }
+
+    /// <summary>Copper value of owned stock applied (each used unit valued at its cheapest source).</summary>
+    public int OwnedSavings { get; set; }
 }

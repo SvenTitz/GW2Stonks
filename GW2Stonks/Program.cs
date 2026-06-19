@@ -67,6 +67,7 @@ namespace GW2Stonks
             gw2Http.AddHttpMessageHandler<RateLimitingHandler>();
 
             builder.Services.AddScoped<Gw2SyncService>();
+            builder.Services.AddScoped<AccountService>();
             builder.Services.AddSingleton<ProfitService>();
             builder.Services.AddSingleton<CartService>();
             builder.Services.AddSingleton<ProfitFilterState>();
@@ -136,6 +137,15 @@ namespace GW2Stonks
             if (args.Length > 0 && string.Equals(args[0], "volume", StringComparison.OrdinalIgnoreCase))
             {
                 await RunVolumeCliAsync(app.Services, args.Length > 1 ? args[1] : "refresh");
+                return;
+            }
+
+            // Account integration (uses the API key saved via the Settings page):
+            //   dotnet run -- account status     show key + owned-stock status
+            //   dotnet run -- account refresh    re-read owned materials from the GW2 API
+            if (args.Length > 0 && string.Equals(args[0], "account", StringComparison.OrdinalIgnoreCase))
+            {
+                await RunAccountCliAsync(app.Services, args.Length > 1 ? args[1] : "status");
                 return;
             }
 
@@ -302,7 +312,9 @@ namespace GW2Stonks
 
             using var scope = services.CreateScope();
             var profit = scope.ServiceProvider.GetRequiredService<ProfitService>();
-            var plan = await profit.BuildPlanAsync(cart, PricingMode.InstantBuy);
+            var account = scope.ServiceProvider.GetRequiredService<AccountService>();
+            var owned = await account.GetOwnedAsync();
+            var plan = await profit.BuildPlanAsync(cart, PricingMode.InstantBuy, owned);
 
             Console.WriteLine();
             Console.WriteLine("=== SHOPPING LIST ===");
@@ -314,6 +326,14 @@ namespace GW2Stonks
             }
             Console.WriteLine($"Total buy cost: {Coin.Format(plan.TotalBuyCost)}");
 
+            if (plan.OwnedUsed.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"=== FROM YOUR STOCK ({plan.OwnedTypesApplied:N0} type(s), saved {Coin.Format(plan.OwnedSavings)}) ===");
+                foreach (var line in plan.OwnedUsed)
+                    Console.WriteLine($"  {line.Quantity,7:N0}x {line.Name,-42} {Coin.Format(line.Value)}");
+            }
+
             Console.WriteLine();
             Console.WriteLine("=== CRAFTING STEPS (deepest first) ===");
             foreach (var group in plan.Steps.GroupBy(s => s.Discipline))
@@ -322,6 +342,42 @@ namespace GW2Stonks
                 foreach (var step in group)
                     Console.WriteLine($"  Craft {step.Quantity,6:N0}x {step.Name,-42} ({step.Crafts} craft(s))");
             }
+        }
+
+        private static async Task RunAccountCliAsync(IServiceProvider services, string what)
+        {
+            using var scope = services.CreateScope();
+            var account = scope.ServiceProvider.GetRequiredService<AccountService>();
+
+            if (string.Equals(what, "refresh", StringComparison.OrdinalIgnoreCase))
+            {
+                var lastPhase = "";
+                var progress = new Progress<SyncProgress>(p =>
+                {
+                    if (p.Phase != lastPhase) { lastPhase = p.Phase; Console.WriteLine(); }
+                    Console.Write($"\r{p.Phase}   ");
+                });
+                try
+                {
+                    var n = await account.RefreshOwnedAsync(progress);
+                    Console.WriteLine();
+                    Console.WriteLine($"Owned stock refreshed: {n:N0} item types.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"Refresh failed: {ex.Message}");
+                }
+                return;
+            }
+
+            var status = await account.GetStatusAsync();
+            Console.WriteLine($"API key saved : {(status.HasKey ? "yes" : "no")}");
+            if (status.AccountName is not null) Console.WriteLine($"Account       : {status.AccountName}");
+            Console.WriteLine($"Owned types   : {status.OwnedItemTypes:N0}");
+            Console.WriteLine($"Owned updated : {(status.OwnedUpdatedUtc is { } ts ? ts.ToLocalTime().ToString("g") : "never")}");
+            if (!status.HasKey)
+                Console.WriteLine("Set a key on the Settings page, then run: dotnet run -- account refresh");
         }
 
         private static void PrintCraftNode(GW2Stonks.Models.CraftNode node, int depth)

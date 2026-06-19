@@ -1,0 +1,186 @@
+@page "/settings"
+@inject AccountService Account
+@inject NotificationService Notifications
+@using GW2Stonks.Gw2Api
+
+<PageTitle>Settings</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenText TextStyle="TextStyle.H4" class="rz-m-0">Settings</RadzenText>
+
+    <RadzenCard>
+        <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">GW2 account API key</RadzenText>
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-3">
+            Used to read the materials you already own so the planner can subtract them from the shopping list.
+            Create one at <a href="https://account.arena.net/applications" target="_blank" rel="noopener noreferrer">account.arena.net/applications</a>
+            with at least the <b>account</b> and <b>inventories</b> permissions (add <b>characters</b> to also count items in your characters' bags).
+            The key is stored in your local database and never leaves this machine.
+        </RadzenText>
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem">
+            <RadzenFormField Text="@(_status?.HasKey == true ? "Replace saved key" : "API key")" Variant="Variant.Outlined" Style="min-width:28rem">
+                <RadzenPassword @bind-Value="_keyInput" autocomplete="off" Placeholder="XXXXXXXX-XXXX-…" />
+            </RadzenFormField>
+            <RadzenButton Text="Save key" Icon="save" Click="@SaveKey" Disabled="@_busy" />
+            <RadzenButton Text="Clear" Icon="delete" ButtonStyle="ButtonStyle.Light" Click="@ClearKey"
+                          Disabled="@(_busy || _status?.HasKey != true)" />
+        </RadzenStack>
+
+        @if (_status is not null)
+        {
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" class="rz-mt-3">
+                @if (_status.HasKey)
+                {
+                    <RadzenIcon Icon="check_circle" IconStyle="IconStyle.Success" />
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+                        A key is saved@(_status.AccountName is not null ? $" for {_status.AccountName}" : "").
+                    </RadzenText>
+                }
+                else
+                {
+                    <RadzenIcon Icon="info" />
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">No key saved yet.</RadzenText>
+                }
+            </RadzenStack>
+        }
+
+        @if (_validated is not null)
+        {
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.4rem" class="rz-mt-2">
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">Permissions:</RadzenText>
+                @foreach (var p in _validated.Permissions)
+                {
+                    <RadzenBadge Text="@p" BadgeStyle="@(p is "inventories" or "account" or "characters" ? BadgeStyle.Success : BadgeStyle.Light)" />
+                }
+                @if (!_validated.Permissions.Contains("inventories"))
+                {
+                    <RadzenBadge Text="missing: inventories" BadgeStyle="BadgeStyle.Danger" />
+                }
+            </RadzenStack>
+        }
+    </RadzenCard>
+
+    <RadzenCard>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="1rem">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">Owned materials</RadzenText>
+            <RadzenButton Text="Refresh owned materials" Icon="sync" Click="@RefreshOwned"
+                          Disabled="@(_busy || _status?.HasKey != true)" />
+            @if (_status is not null)
+            {
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+                    @if (_status.OwnedUpdatedUtc is { } ts)
+                    {
+                        <text>@_status.OwnedItemTypes.ToString("N0") item types · updated @ts.ToLocalTime().ToString("g")</text>
+                    }
+                    else
+                    {
+                        <text>Not refreshed yet.</text>
+                    }
+                </RadzenText>
+            }
+        </RadzenStack>
+
+        @if (_busy && _progress is not null)
+        {
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" class="rz-mt-2">
+                <RadzenProgressBarCircular Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">@_progress</RadzenText>
+            </RadzenStack>
+        }
+
+        <RadzenText TextStyle="TextStyle.Body2" class="rz-mt-2">
+            The planner subtracts these from its shopping list. Refresh after a crafting session to keep counts current.
+        </RadzenText>
+    </RadzenCard>
+</RadzenStack>
+
+@code {
+    private string _keyInput = "";
+    private bool _busy;
+    private string? _progress;
+    private AccountStatus? _status;
+    private Gw2TokenInfoDto? _validated;
+
+    protected override async Task OnInitializedAsync() => await LoadStatus();
+
+    private async Task LoadStatus()
+    {
+        _status = await Account.GetStatusAsync();
+        StateHasChanged();
+    }
+
+    private async Task SaveKey()
+    {
+        if (string.IsNullOrWhiteSpace(_keyInput))
+        {
+            Notifications.Notify(NotificationSeverity.Warning, "Enter a key first");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var key = _keyInput.Trim();
+            await Account.SaveApiKeyAsync(key);
+            _validated = await Account.ValidateAsync(key);
+            _keyInput = "";
+
+            if (_validated is null)
+                Notifications.Notify(NotificationSeverity.Warning, "Key saved, but the GW2 API rejected it", "Double-check you pasted it correctly.", 8000);
+            else if (!_validated.Permissions.Contains("inventories"))
+                Notifications.Notify(NotificationSeverity.Warning, "Key saved, but it lacks the 'inventories' permission", "Create a new key with that scope to read your stock.", 8000);
+            else
+                Notifications.Notify(NotificationSeverity.Success, "API key saved", _validated.Name);
+
+            await LoadStatus();
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Could not save key", ex.Message, 8000);
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ClearKey()
+    {
+        _busy = true;
+        try
+        {
+            await Account.SaveApiKeyAsync(null);
+            _validated = null;
+            Notifications.Notify(NotificationSeverity.Info, "API key cleared");
+            await LoadStatus();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RefreshOwned()
+    {
+        if (_busy) return;
+        _busy = true;
+        _progress = "Starting…";
+
+        var progress = new Progress<SyncProgress>(p =>
+        {
+            _progress = p.Total > 1 ? $"{p.Phase} ({p.Done:N0}/{p.Total:N0})" : p.Phase;
+            InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            var n = await Task.Run(() => Account.RefreshOwnedAsync(progress));
+            Notifications.Notify(NotificationSeverity.Success, "Owned materials refreshed", $"{n:N0} item types in stock.");
+            await LoadStatus();
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(NotificationSeverity.Error, "Refresh failed", ex.Message, 8000);
+        }
+        finally
+        {
+            _busy = false;
+            _progress = null;
+            StateHasChanged();
+        }
+    }
+}

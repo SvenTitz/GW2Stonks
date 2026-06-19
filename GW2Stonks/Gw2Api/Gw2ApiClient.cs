@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -35,6 +36,41 @@ public sealed class Gw2ApiClient
 
     public Task<List<Gw2ListingsDto>> GetListingsAsync(IEnumerable<int> ids, CancellationToken ct = default) =>
         GetByIdsAsync<Gw2ListingsDto>("v2/commerce/listings", ids, ct);
+
+    // ── Authenticated account endpoints (require an API key passed as a bearer token) ──────────
+
+    /// <summary>Validate a key and read its scopes; null on an invalid/unauthorized key.</summary>
+    public Task<Gw2TokenInfoDto?> GetTokenInfoAsync(string apiKey, CancellationToken ct = default) =>
+        GetAuthedAsync<Gw2TokenInfoDto>("v2/tokeninfo", apiKey, ct);
+
+    /// <summary>Material storage stacks (/v2/account/materials).</summary>
+    public async Task<List<Gw2ItemSlotDto>> GetMaterialsAsync(string apiKey, CancellationToken ct = default) =>
+        await GetAuthedAsync<List<Gw2ItemSlotDto>>("v2/account/materials", apiKey, ct) ?? new();
+
+    /// <summary>Bank slots (/v2/account/bank); empty slots come back as null.</summary>
+    public async Task<List<Gw2ItemSlotDto?>> GetBankAsync(string apiKey, CancellationToken ct = default) =>
+        await GetAuthedAsync<List<Gw2ItemSlotDto?>>("v2/account/bank", apiKey, ct) ?? new();
+
+    /// <summary>Shared inventory slots (/v2/account/inventory); empty slots come back as null.</summary>
+    public async Task<List<Gw2ItemSlotDto?>> GetSharedInventoryAsync(string apiKey, CancellationToken ct = default) =>
+        await GetAuthedAsync<List<Gw2ItemSlotDto?>>("v2/account/inventory", apiKey, ct) ?? new();
+
+    /// <summary>Character names on the account (/v2/characters).</summary>
+    public async Task<List<string>> GetCharacterNamesAsync(string apiKey, CancellationToken ct = default) =>
+        await GetAuthedAsync<List<string>>("v2/characters", apiKey, ct) ?? new();
+
+    /// <summary>One character's bags + their slots (/v2/characters/{name}/inventory).</summary>
+    public Task<Gw2CharacterInventoryDto?> GetCharacterInventoryAsync(string apiKey, string name, CancellationToken ct = default) =>
+        GetAuthedAsync<Gw2CharacterInventoryDto>($"v2/characters/{Uri.EscapeDataString(name)}/inventory", apiKey, ct);
+
+    private async Task<T?> GetAuthedAsync<T>(string path, string apiKey, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, path);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        using var resp = await _http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadFromJsonAsync<T>(Json, ct);
+    }
 
     private async Task<List<T>> GetListAsync<T>(string path, CancellationToken ct)
     {
