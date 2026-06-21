@@ -68,9 +68,11 @@ namespace GW2Stonks
 
             builder.Services.AddScoped<Gw2SyncService>();
             builder.Services.AddScoped<AccountService>();
+            builder.Services.AddScoped<ProvisionerService>();
             builder.Services.AddSingleton<ProfitService>();
             builder.Services.AddSingleton<CartService>();
             builder.Services.AddSingleton<ProfitFilterState>();
+            builder.Services.AddHostedService<CartLoader>();
             builder.Services.AddHostedService<PriceRefreshBackgroundService>();
 
             // datawars2.ie volume source (separate host): typed client + cached-volume refresh.
@@ -146,6 +148,46 @@ namespace GW2Stonks
             if (args.Length > 0 && string.Equals(args[0], "account", StringComparison.OrdinalIgnoreCase))
             {
                 await RunAccountCliAsync(app.Services, args.Length > 1 ? args[1] : "status");
+                return;
+            }
+
+            // Analyse the account's current sell listings vs cheaper supply ahead:
+            //   dotnet run -- listings [markPercent]   (default 50)
+            if (args.Length > 0 && string.Equals(args[0], "listings", StringComparison.OrdinalIgnoreCase))
+            {
+                var pct = args.Length > 1 && double.TryParse(args[1], System.Globalization.CultureInfo.InvariantCulture, out var p) ? p : 50;
+                await RunListingsCliAsync(app.Services, pct);
+                return;
+            }
+
+            // Profit-grid items whose recursive craft tree contains a given ingredient:
+            //   dotnet run -- requires <itemId>
+            if (args.Length > 0 && string.Equals(args[0], "requires", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length < 2 || !int.TryParse(args[1], out var rid))
+                {
+                    Console.WriteLine("Usage: dotnet run -- requires <itemId>");
+                    return;
+                }
+                await RunRequiresCliAsync(app.Services, rid);
+                return;
+            }
+
+            // Price the Faction Provisioner trade-in lists (cheapest items to buy for tokens):
+            //   dotnet run -- provisioner
+            if (args.Length > 0 && string.Equals(args[0], "provisioner", StringComparison.OrdinalIgnoreCase))
+            {
+                await RunProvisionerCliAsync(app.Services);
+                return;
+            }
+
+            // Inspect or edit the persisted craft cart:
+            //   dotnet run -- cart [list]
+            //   dotnet run -- cart add <itemId> <qty>
+            //   dotnet run -- cart clear
+            if (args.Length > 0 && string.Equals(args[0], "cart", StringComparison.OrdinalIgnoreCase))
+            {
+                await RunCartCliAsync(app.Services, args.Skip(1).ToList());
                 return;
             }
 
@@ -378,6 +420,104 @@ namespace GW2Stonks
             Console.WriteLine($"Owned updated : {(status.OwnedUpdatedUtc is { } ts ? ts.ToLocalTime().ToString("g") : "never")}");
             if (!status.HasKey)
                 Console.WriteLine("Set a key on the Settings page, then run: dotnet run -- account refresh");
+        }
+
+        private static async Task RunProvisionerCliAsync(IServiceProvider services)
+        {
+            using var scope = services.CreateScope();
+            var svc = scope.ServiceProvider.GetRequiredService<ProvisionerService>();
+            var view = await svc.GetAsync();
+
+            foreach (var v in view.Vendors)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"=== {v.Name} — {v.Zone}  ({v.Waypoint} {v.WaypointChatLink}) ===");
+                foreach (var t in v.Tabs)
+                {
+                    Console.WriteLine($"  [{t.Tab}]  CHEAPEST: {(t.ItemName ?? "— none tradable")}  " +
+                        $"{(t.UnitPrice is int u ? Coin.Format(u) : "")}  (×7 = {(t.WeeklyCost is int w ? Coin.Format(w) : "-")})");
+                    foreach (var o in t.Options)
+                        Console.WriteLine($"        {(o.UnitPrice is int up ? Coin.Format(up) : "NO PRICE"),-13} " +
+                            $"{o.ItemName}{(o.ItemId is null ? "   <-- NOT IN CATALOG" : "")}");
+                }
+                Console.WriteLine($"  Weekly total (cheapest×7 across tabs): {(v.WeeklyTotal is int wt ? Coin.Format(wt) : "-")}");
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("=== DAILY ROTATION MATERIALS (cheapest first) ===");
+            foreach (var r in view.DailyMaterials)
+                Console.WriteLine($"{(r.CostPerToken is int c ? Coin.Format(c) : "?"),-14} " +
+                    $"{(r.UnitPrice is int u ? Coin.Format(u) : "-"),-12} {r.Quantity,6:N0}  {r.ItemName}" +
+                    $"{(r.ItemId is null ? "   <-- NOT IN CATALOG" : "")}");
+        }
+
+        private static async Task RunCartCliAsync(IServiceProvider services, List<string> args)
+        {
+            using var scope = services.CreateScope();
+            var cart = scope.ServiceProvider.GetRequiredService<CartService>();
+            await cart.LoadAsync(); // the hosted CartLoader only runs for the web host, not the CLI
+
+            var cmd = args.Count > 0 ? args[0].ToLowerInvariant() : "list";
+            if (cmd == "add" && args.Count >= 3 && int.TryParse(args[1], out var id) && int.TryParse(args[2], out var qty))
+            {
+                var dbf = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AppDbContext>>();
+                await using var db = await dbf.CreateDbContextAsync();
+                var item = await db.Items.AsNoTracking().FirstOrDefaultAsync(i => i.Id == id);
+                cart.Add(id, item?.Name ?? $"Item {id}", item?.IconUrl, qty);
+                await cart.SaveAsync();
+                Console.WriteLine($"Added {qty}x {item?.Name ?? id.ToString()}.");
+            }
+            else if (cmd == "clear")
+            {
+                cart.Clear();
+                await cart.SaveAsync();
+                Console.WriteLine("Cart cleared.");
+            }
+
+            foreach (var i in cart.Items)
+                Console.WriteLine($"  {i.Quantity,7:N0}x {i.Name}  (#{i.ItemId})");
+            Console.WriteLine($"Cart: {cart.Count} item type(s).");
+        }
+
+        private static async Task RunRequiresCliAsync(IServiceProvider services, int itemId)
+        {
+            using var scope = services.CreateScope();
+            var profit = scope.ServiceProvider.GetRequiredService<ProfitService>();
+
+            var set = await profit.GetItemsRequiringAsync(itemId);
+            var rows = await profit.GetRowsAsync(PricingMode.InstantBuy);
+            var matching = rows.Where(r => set.Contains(r.Id)).OrderByDescending(r => r.Profit).ToList();
+
+            Console.WriteLine($"#{itemId}: {set.Count:N0} items have it in their craft tree; {matching.Count:N0} are in the profit grid.");
+            Console.WriteLine($"{"Profit",-13} Name");
+            foreach (var r in matching.Take(20))
+                Console.WriteLine($"{Coin.Format(r.Profit),-13} {r.Name}");
+        }
+
+        private static async Task RunListingsCliAsync(IServiceProvider services, double markPct)
+        {
+            using var scope = services.CreateScope();
+            var account = scope.ServiceProvider.GetRequiredService<AccountService>();
+
+            IReadOnlyList<GW2Stonks.Models.SellListingRow> rows;
+            try { rows = await account.GetSellListingsAsync(); }
+            catch (Exception ex) { Console.WriteLine($"Could not read listings: {ex.Message}"); return; }
+
+            if (rows.Count == 0) { Console.WriteLine("No active sell listings."); return; }
+
+            static bool IsRelist(GW2Stonks.Models.SellListingRow r, double pct) =>
+                r.SoldPerDay is int s && s > 0 && r.UnitsAhead > pct / 100.0 * s;
+
+            Console.WriteLine($"My sell listings ({rows.Count}) — relist when cheaper-ahead > {markPct:0.#}% of daily sales:");
+            Console.WriteLine($"{"Relist",-7} {"Qty",6} {"My price",-13} {"Ahead",7} {"Sold/d",7} {"Ahead%",8}  Item");
+            foreach (var r in rows)
+            {
+                var pct = r.AheadVsDailyPct is double a ? a.ToString("0.#") + "%" : "—";
+                var sold = r.SoldPerDay is int s ? s.ToString("N0") : "—";
+                Console.WriteLine($"{(IsRelist(r, markPct) ? "RELIST" : "ok"),-7} {r.Quantity,6:N0} {Coin.Format(r.Price),-13} " +
+                    $"{r.UnitsAhead,7:N0} {sold,7} {pct,8}  {r.Name}");
+            }
+            Console.WriteLine($"Flagged to relist: {rows.Count(r => IsRelist(r, markPct))}");
         }
 
         private static void PrintCraftNode(GW2Stonks.Models.CraftNode node, int depth)
