@@ -65,3 +65,8 @@ $RECYCLE.BIN/
 .DS_Store
 *.log
 *.tmp
+
+# ── Claude Code ───────────────────────────────────────────────────
+# Per-machine local settings (tool-permission allowlist, etc.). A shared
+# .claude/settings.json may be committed; the .local override is not.
+**/.claude/settings.local.json
