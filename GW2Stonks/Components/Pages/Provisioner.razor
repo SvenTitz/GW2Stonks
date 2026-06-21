@@ -1,0 +1,147 @@
+@page "/provisioner"
+@inject ProvisionerService ProvisionerSvc
+@inject IJSRuntime JS
+
+<PageTitle>Provisioner tokens</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="1rem">
+        <RadzenText TextStyle="TextStyle.H4" class="rz-m-0">Provisioner tokens</RadzenText>
+        <RadzenButton Text="Refresh prices" Icon="refresh" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                      Click="@Load" Disabled="@_loading" />
+    </RadzenStack>
+    <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">
+        For each <b>Heart of Maguuma</b> Faction Provisioner, the <b>cheapest item to buy</b> in each tab — buy it
+        <b>7× per week</b> and trade for Provisioner Tokens. Cost is the <b>average of the 7 cheapest sell listings</b>
+        (what you'd actually pay to buy all 7). Item names are wiki links with a copy button, and the waypoint button copies its chat link.
+    </RadzenText>
+
+    @if (_loading)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenProgressBarCircular Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">Pricing…</RadzenText>
+        </RadzenStack>
+    }
+    else if (_view is not null)
+    {
+        @foreach (var v in _view.Vendors)
+        {
+            <RadzenCard>
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="0.75rem" class="rz-mb-2">
+                    <RadzenText TextStyle="TextStyle.H6" class="rz-m-0">@v.Name</RadzenText>
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">@v.Zone · @v.Limit per tab</RadzenText>
+                    @if (!string.IsNullOrEmpty(v.WaypointChatLink))
+                    {
+                        <RadzenButton Icon="place" Text="@v.Waypoint" Size="ButtonSize.ExtraSmall" Variant="Variant.Flat"
+                                      ButtonStyle="ButtonStyle.Light" Click="@(() => Copy(v.WaypointChatLink!))"
+                                      title="Copy waypoint chat link" />
+                    }
+                </RadzenStack>
+
+                <RadzenDataGrid Data="@v.Tabs" TItem="TabBest" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
+                    <Columns>
+                        <RadzenDataGridColumn TItem="TabBest" Property="Tab" Title="Tab" Width="130px">
+                            <FooterTemplate><b>Weekly total</b></FooterTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="TabBest" Title="Cheapest item to buy" MinWidth="220px">
+                            <Template Context="t">
+                                @if (t.ItemName is null)
+                                {
+                                    <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">no tradable option</RadzenText>
+                                }
+                                else
+                                {
+                                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                                        @if (!string.IsNullOrEmpty(t.IconUrl))
+                                        {
+                                            <img class="gw2-tree-icon" src="@t.IconUrl" alt="" loading="lazy" />
+                                        }
+                                        <ItemName Name="@t.ItemName" />
+                                    </div>
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="TabBest" Property="UnitPrice" Title="Avg unit (of 7)" Width="150px" TextAlign="TextAlign.Right">
+                            <Template Context="t"><CoinDisplay Copper="@t.UnitPrice" /></Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="TabBest" Property="WeeklyCost" Title="Buy 7" Width="150px" TextAlign="TextAlign.Right">
+                            <Template Context="t"><CoinDisplay Copper="@t.WeeklyCost" /></Template>
+                            <FooterTemplate><CoinDisplay Copper="@v.WeeklyTotal" /></FooterTemplate>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenCard>
+        }
+
+        <RadzenCard>
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-1">Daily-rotation crafting materials — cheapest first</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-2">
+                Exactly <b>3 of these 10</b> appear each day at the Secrets of the Obscure &amp; Janthir Wilds provisioners (1 token per day each).
+            </RadzenText>
+            <RadzenDataGrid Data="@_view.DailyMaterials" TItem="PricedRow" AllowPaging="false"
+                            AllowSorting="true" GridLines="DataGridGridLines.Horizontal">
+                <Columns>
+                    <RadzenDataGridColumn TItem="PricedRow" Title="" Sortable="false" Width="72px" TextAlign="TextAlign.Center">
+                        <Template Context="r">
+                            <div class="gw2-icon-wrap">
+                                @if (!string.IsNullOrEmpty(r.IconUrl))
+                                {
+                                    <img class="gw2-item-icon" src="@r.IconUrl" alt="" loading="lazy" />
+                                }
+                            </div>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="PricedRow" Property="ItemName" Title="Material" MinWidth="200px">
+                        <Template Context="r"><ItemName Name="@r.ItemName" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="PricedRow" Property="Quantity" Title="Qty/token" Width="110px" TextAlign="TextAlign.Right">
+                        <Template Context="r">@r.Quantity.ToString("N0")</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="PricedRow" Property="UnitPrice" Title="Unit" Width="130px" TextAlign="TextAlign.Right">
+                        <Template Context="r">
+                            @if (r.UnitPrice is null)
+                            {
+                                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">account-bound</RadzenText>
+                            }
+                            else
+                            {
+                                <CoinDisplay Copper="@r.UnitPrice" />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="PricedRow" Property="CostPerToken" Title="Cost / token" Width="150px" TextAlign="TextAlign.Right">
+                        <Template Context="r">
+                            @if (r.CostPerToken is null)
+                            {
+                                <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">—</RadzenText>
+                            }
+                            else
+                            {
+                                <CoinDisplay Copper="@r.CostPerToken" />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    }
+</RadzenStack>
+
+@code {
+    private bool _loading = true;
+    private ProvisionerView? _view;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        _loading = true;
+        StateHasChanged();
+        _view = await ProvisionerSvc.GetAsync();
+        _loading = false;
+        StateHasChanged();
+    }
+
+    private async Task Copy(string text) => await JS.InvokeVoidAsync("gw2Copy", text);
+}
