@@ -46,6 +46,31 @@ public sealed class VolumeService
         finally { Gate.Release(); }
     }
 
+    /// <summary>
+    /// Return sold/day for the given items, fetching + caching volume for any not already in the DB.
+    /// Lets the listings page rate raw materials (which sit outside the craftable set the full
+    /// refresh covers). Best-effort: if caching fails, the freshly computed figures are still used.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, int>> EnsureSoldPerDayAsync(
+        IReadOnlyCollection<int> ids, CancellationToken ct = default)
+    {
+        await using var db = await _dbf.CreateDbContextAsync(ct);
+        var have = await db.ItemVolumes.AsNoTracking().Where(v => ids.Contains(v.ItemId))
+            .ToDictionaryAsync(v => v.ItemId, v => v.SoldPerDay, ct);
+
+        var missing = ids.Where(id => !have.ContainsKey(id)).Distinct().ToList();
+        if (missing.Count == 0) return have;
+
+        var start = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-Math.Max(1, _options.HistoryDays)));
+        var rows = await FetchHistoryAsync(missing, start, null, ct);
+        var volumes = rows.GroupBy(r => r.ItemId).Select(g => BuildVolume(g.Key, g)).ToList();
+
+        foreach (var v in volumes) have[v.ItemId] = v.SoldPerDay; // use computed values even if caching fails
+        try { if (volumes.Count > 0) await UpsertAsync(db, volumes, null, ct); }
+        catch (Exception ex) { _log.LogWarning(ex, "Could not cache on-demand volumes for {N} items", volumes.Count); }
+        return have;
+    }
+
     private async Task<int> RefreshCoreAsync(IProgress<SyncProgress>? progress, CancellationToken ct)
     {
         await using var db = await _dbf.CreateDbContextAsync(ct);
@@ -62,26 +87,7 @@ public sealed class VolumeService
         var start = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-Math.Max(1, _options.HistoryDays)));
         var rows = await FetchHistoryAsync(targetIds, start, progress, ct);
 
-        // sold/day = mean over complete days (the current UTC day is still forming); supply = latest day.
-        var today = DateTime.UtcNow.Date;
-        var volumes = new List<ItemVolume>(targetIds.Count);
-        foreach (var g in rows.GroupBy(r => r.ItemId))
-        {
-            var ordered = g.OrderBy(r => r.Date).ToList();
-            var complete = ordered.Where(r => r.Date.Date < today).ToList();
-            var basis = complete.Count > 0 ? complete : ordered;
-            var latest = ordered[^1];
-
-            volumes.Add(new ItemVolume
-            {
-                ItemId = g.Key,
-                SoldPerDay = (int)Math.Round(basis.Average(r => (double)r.SellSold)),
-                BoughtPerDay = (int)Math.Round(basis.Average(r => (double)r.BuySold)),
-                SupplyNow = (int)Math.Round(latest.SellQuantityAvg),
-                DemandNow = (int)Math.Round(latest.BuyQuantityAvg),
-                UpdatedUtc = DateTime.UtcNow
-            });
-        }
+        var volumes = rows.GroupBy(r => r.ItemId).Select(g => BuildVolume(g.Key, g)).ToList();
 
         await UpsertAsync(db, volumes, progress, ct);
         await UpdateSyncStateAsync(db, "volume", volumes.Count, ct);
@@ -149,6 +155,26 @@ public sealed class VolumeService
             saved += chunk.Length;
             progress?.Report(new SyncProgress("Saving volume", saved, volumes.Count));
         }
+    }
+
+    /// <summary>sold/day = mean over complete days (the current UTC day is still forming); supply = latest day.</summary>
+    private static ItemVolume BuildVolume(int itemId, IEnumerable<Datawars2HistoryDto> history)
+    {
+        var ordered = history.OrderBy(r => r.Date).ToList();
+        var today = DateTime.UtcNow.Date;
+        var complete = ordered.Where(r => r.Date.Date < today).ToList();
+        var basis = complete.Count > 0 ? complete : ordered;
+        var latest = ordered[^1];
+
+        return new ItemVolume
+        {
+            ItemId = itemId,
+            SoldPerDay = (int)Math.Round(basis.Average(r => (double)r.SellSold)),
+            BoughtPerDay = (int)Math.Round(basis.Average(r => (double)r.BuySold)),
+            SupplyNow = (int)Math.Round(latest.SellQuantityAvg),
+            DemandNow = (int)Math.Round(latest.BuyQuantityAvg),
+            UpdatedUtc = DateTime.UtcNow
+        };
     }
 
     private static async Task UpdateSyncStateAsync(AppDbContext db, string key, int count, CancellationToken ct)

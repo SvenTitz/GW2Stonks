@@ -63,6 +63,20 @@ public sealed class Gw2ApiClient
     public Task<Gw2CharacterInventoryDto?> GetCharacterInventoryAsync(string apiKey, string name, CancellationToken ct = default) =>
         GetAuthedAsync<Gw2CharacterInventoryDto>($"v2/characters/{Uri.EscapeDataString(name)}/inventory", apiKey, ct);
 
+    /// <summary>All of the account's current sell listings (/v2/commerce/transactions/current/sells), paged.</summary>
+    public async Task<List<Gw2TransactionDto>> GetCurrentSellsAsync(string apiKey, CancellationToken ct = default)
+    {
+        var all = new List<Gw2TransactionDto>();
+        for (var page = 0; page < 50; page++) // safety cap (50 × 200 = 10k listings)
+        {
+            var batch = await GetAuthedAsync<List<Gw2TransactionDto>>(
+                $"v2/commerce/transactions/current/sells?page={page}&page_size=200", apiKey, ct) ?? new();
+            all.AddRange(batch);
+            if (batch.Count < 200) break;
+        }
+        return all;
+    }
+
     private async Task<T?> GetAuthedAsync<T>(string path, string apiKey, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, path);

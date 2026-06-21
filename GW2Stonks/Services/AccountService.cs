@@ -1,6 +1,7 @@
 using GW2Stonks.Data;
 using GW2Stonks.Data.Entities;
 using GW2Stonks.Gw2Api;
+using GW2Stonks.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace GW2Stonks.Services;
@@ -24,12 +25,14 @@ public sealed class AccountService
 
     private readonly Gw2ApiClient _api;
     private readonly IDbContextFactory<AppDbContext> _dbf;
+    private readonly VolumeService _volume;
     private readonly ILogger<AccountService> _log;
 
-    public AccountService(Gw2ApiClient api, IDbContextFactory<AppDbContext> dbf, ILogger<AccountService> log)
+    public AccountService(Gw2ApiClient api, IDbContextFactory<AppDbContext> dbf, VolumeService volume, ILogger<AccountService> log)
     {
         _api = api;
         _dbf = dbf;
+        _volume = volume;
         _log = log;
     }
 
@@ -187,6 +190,99 @@ public sealed class AccountService
             db.SyncStates.Add(new SyncState { Key = OwnedSyncKey, LastSyncedUtc = DateTime.UtcNow, RecordCount = owned.Count });
         else { state.LastSyncedUtc = DateTime.UtcNow; state.RecordCount = owned.Count; }
         await db.SaveChangesAsync(ct);
+    }
+
+    // ── Trading-post sell listings ──────────────────────────────────────────
+
+    /// <summary>
+    /// The account's active sell listings, each annotated with how many cheaper units sit ahead of
+    /// it on the trading post and the item's cached daily sales. Throws if no key is saved, the key
+    /// is invalid, or it lacks the 'tradingpost' permission.
+    /// </summary>
+    public async Task<IReadOnlyList<SellListingRow>> GetSellListingsAsync(CancellationToken ct = default)
+    {
+        var key = await GetApiKeyAsync(ct)
+            ?? throw new InvalidOperationException("No API key saved. Add one on the Settings page first.");
+        var token = await _api.GetTokenInfoAsync(key, ct)
+            ?? throw new InvalidOperationException("The saved API key was rejected by the GW2 API.");
+        if (!token.Permissions.Contains("tradingpost", StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The API key needs the 'tradingpost' permission to read your sell listings.");
+
+        var sells = await _api.GetCurrentSellsAsync(key, ct);
+        if (sells.Count == 0) return Array.Empty<SellListingRow>();
+
+        // Collapse identical (item, price) listings into one row.
+        var grouped = sells
+            .GroupBy(s => (s.ItemId, s.Price))
+            .Select(g => (g.Key.ItemId, g.Key.Price, Quantity: g.Sum(x => x.Quantity)))
+            .ToList();
+
+        var itemIds = grouped.Select(g => g.ItemId).Distinct().ToList();
+
+        // Public order books (batched ≤200) to see what's listed cheaper than me.
+        var books = new Dictionary<int, Gw2ListingsDto>();
+        foreach (var chunk in itemIds.Chunk(200))
+            foreach (var b in await _api.GetListingsAsync(chunk, ct))
+                books[b.Id] = b;
+
+        await using var db = await _dbf.CreateDbContextAsync(ct);
+        var meta = await db.Items.AsNoTracking().Where(i => itemIds.Contains(i.Id))
+            .Select(i => new { i.Id, i.Name, i.IconUrl }).ToDictionaryAsync(i => i.Id, ct);
+
+        // Daily sales for the listed items, fetching+caching any (often raw mats) not yet cached.
+        var vol = await _volume.EnsureSoldPerDayAsync(itemIds, ct);
+
+        var rows = new List<SellListingRow>(grouped.Count);
+        foreach (var (itemId, price, quantity) in grouped)
+        {
+            var sellsBook = books.TryGetValue(itemId, out var book) ? book.Sells : null;
+            var ahead = sellsBook?.Where(l => l.UnitPrice < price).Sum(l => l.Quantity) ?? 0;
+            var lowest = sellsBook is { Count: > 0 } ? sellsBook.Min(l => l.UnitPrice) : (int?)null;
+            int? soldPerDay = vol.TryGetValue(itemId, out var s) ? s : null;
+            double? aheadPct = soldPerDay is > 0 ? (double)ahead / soldPerDay.Value * 100 : null;
+
+            meta.TryGetValue(itemId, out var m);
+            rows.Add(new SellListingRow
+            {
+                ItemId = itemId,
+                Name = m?.Name ?? $"Item {itemId}",
+                IconUrl = m?.IconUrl,
+                Price = price,
+                Quantity = quantity,
+                LowestSell = lowest,
+                UnitsAhead = ahead,
+                SoldPerDay = soldPerDay,
+                AheadVsDailyPct = aheadPct
+            });
+        }
+
+        // Worst-positioned first (highest cheaper-supply vs daily sales); unknown-volume rows last.
+        return rows.OrderByDescending(r => r.AheadVsDailyPct ?? -1).ThenBy(r => r.Name).ToList();
+    }
+
+    /// <summary>
+    /// Total quantity the account currently has listed for sale, per item id. Returns empty when no
+    /// key is saved, it lacks the 'tradingpost' permission, or the call fails — so callers (e.g. the
+    /// fill-cart subtraction) degrade gracefully to "nothing already listed".
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, int>> GetListedQuantitiesAsync(CancellationToken ct = default)
+    {
+        var key = await GetApiKeyAsync(ct);
+        if (key is null) return new Dictionary<int, int>();
+        try
+        {
+            var token = await _api.GetTokenInfoAsync(key, ct);
+            if (token is null || !token.Permissions.Contains("tradingpost", StringComparer.OrdinalIgnoreCase))
+                return new Dictionary<int, int>();
+
+            var sells = await _api.GetCurrentSellsAsync(key, ct);
+            return sells.GroupBy(s => s.ItemId).ToDictionary(g => g.Key, g => g.Sum(x => x.Quantity));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not read current sell listings; fill-cart will not subtract them");
+            return new Dictionary<int, int>();
+        }
     }
 
     private async Task SaveAccountNameAsync(string name, CancellationToken ct)

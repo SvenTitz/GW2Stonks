@@ -186,3 +186,8 @@ h1:focus {
 .profit-neg {
     color: #d73027;
 }
+
+/* My-listings page: highlight rows that need relisting */
+.relist-row td {
+    background-color: rgba(215, 48, 39, 0.12);
+}

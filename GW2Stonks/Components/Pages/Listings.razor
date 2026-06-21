@@ -1,0 +1,143 @@
+@page "/listings"
+@inject AccountService Account
+
+<PageTitle>My listings</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap" Gap="1rem">
+        <RadzenText TextStyle="TextStyle.H4" class="rz-m-0">My sell listings</RadzenText>
+        <RadzenButton Text="Refresh" Icon="refresh" Click="@Load" Disabled="@_busy" />
+        <RadzenFormField Text="Relist when cheaper-ahead exceeds this % of daily sales" Variant="Variant.Outlined">
+            <RadzenNumeric @bind-Value="_pct" @bind-Value:after="OnPctChanged" TValue="double" Min="0" Max="2000" Step="5" style="width:8rem" />
+        </RadzenFormField>
+    </RadzenStack>
+
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" ShowIcon="true" AllowClose="false">@_error</RadzenAlert>
+    }
+
+    @if (_busy)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenProgressBarCircular Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-m-0">Reading your listings from the trading post…</RadzenText>
+        </RadzenStack>
+    }
+    else if (_rows is null)
+    {
+        <RadzenText TextStyle="TextStyle.Body2">Loading…</RadzenText>
+    }
+    else if (_rows.Count == 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" ShowIcon="true" AllowClose="false">
+            No active sell listings on your account. (Needs an API key with the <b>tradingpost</b> permission, saved on <b>Settings</b>.)
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenText TextStyle="TextStyle.Caption" class="rz-m-0">
+            @_rows.Count listing@(_rows.Count == 1 ? "" : "s") · <b>@_rows.Count(IsRelist)</b> flagged to relist (cheaper supply ahead &gt; @_pct.ToString("0.#")% of daily sales)
+        </RadzenText>
+
+        <RadzenDataGrid @ref="_grid" Data="@_rows" TItem="SellListingRow" AllowPaging="true" PageSize="50"
+                        AllowSorting="true" GridLines="DataGridGridLines.Horizontal" RowRender="@RowRender"
+                        PagerHorizontalAlign="HorizontalAlign.Center" ShowPagingSummary="true">
+            <Columns>
+                <RadzenDataGridColumn TItem="SellListingRow" Title="" Sortable="false" Width="72px" TextAlign="TextAlign.Center">
+                    <Template Context="r">
+                        <div class="gw2-icon-wrap">
+                            @if (!string.IsNullOrEmpty(r.IconUrl))
+                            {
+                                <img class="gw2-item-icon" src="@r.IconUrl" alt="" loading="lazy" />
+                            }
+                        </div>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Property="Name" Title="Item" MinWidth="200px">
+                    <Template Context="r"><ItemName Name="@r.Name" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Property="Quantity" Title="Qty" Width="90px" TextAlign="TextAlign.Right" />
+                <RadzenDataGridColumn TItem="SellListingRow" Property="Price" Title="My price" Width="140px" TextAlign="TextAlign.Right">
+                    <Template Context="r"><CoinDisplay Copper="@r.Price" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Property="LowestSell" Title="Lowest sell" Width="140px" TextAlign="TextAlign.Right">
+                    <Template Context="r"><CoinDisplay Copper="@r.LowestSell" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Property="UnitsAhead" Title="Cheaper ahead" Width="130px" TextAlign="TextAlign.Right">
+                    <Template Context="r">@r.UnitsAhead.ToString("N0")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Property="SoldPerDay" Title="Sold/day" Width="110px" TextAlign="TextAlign.Right">
+                    <Template Context="r">@(r.SoldPerDay is int s ? s.ToString("N0") : "—")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Property="AheadVsDailyPct" Title="Ahead vs daily" Width="130px" TextAlign="TextAlign.Right">
+                    <Template Context="r">@(r.AheadVsDailyPct is double p ? p.ToString("0.#") + "%" : "—")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SellListingRow" Title="Relist?" Width="110px" Sortable="false" TextAlign="TextAlign.Center">
+                    <Template Context="r">
+                        @if (IsRelist(r))
+                        {
+                            <RadzenBadge Text="Relist" BadgeStyle="BadgeStyle.Danger" />
+                        }
+                        else
+                        {
+                            <RadzenBadge Text="OK" BadgeStyle="BadgeStyle.Light" />
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    }
+</RadzenStack>
+
+@code {
+    private double _pct = 50;
+    private bool _busy;
+    private string? _error;
+    private IReadOnlyList<SellListingRow>? _rows;
+    private RadzenDataGrid<SellListingRow>? _grid;
+
+    /// <summary>Flagged when the item sells (sold/day &gt; 0) and the cheaper supply ahead of it
+    /// exceeds the chosen % of those daily sales. Items with no/zero sales aren't flagged —
+    /// relisting can't help an item with no market.</summary>
+    private bool IsRelist(SellListingRow r) =>
+        r.SoldPerDay is int s && s > 0 && r.UnitsAhead > _pct / 100.0 * s;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await Load();
+    }
+
+    private async Task OnPctChanged()
+    {
+        if (_grid is not null) await _grid.Reload();
+        StateHasChanged();
+    }
+
+    private void RowRender(RowRenderEventArgs<SellListingRow> args)
+    {
+        if (args.Data is not null && IsRelist(args.Data)) args.Attributes["class"] = "relist-row";
+    }
+
+    private async Task Load()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            _rows = await Account.GetSellListingsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _rows = null;
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+}

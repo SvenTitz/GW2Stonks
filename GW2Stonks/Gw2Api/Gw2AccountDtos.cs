@@ -33,3 +33,18 @@ public sealed class Gw2BagDto
     public int Size { get; set; }
     public List<Gw2ItemSlotDto?> Inventory { get; set; } = new();
 }
+
+/// <summary>One current trading-post transaction (a buy order or sell listing) from /v2/commerce/transactions/current/*.</summary>
+public sealed class Gw2TransactionDto
+{
+    public long Id { get; set; }
+    public int ItemId { get; set; }
+
+    /// <summary>Unit price in copper.</summary>
+    public int Price { get; set; }
+
+    /// <summary>Units remaining in this listing/order.</summary>
+    public int Quantity { get; set; }
+
+    public string? Created { get; set; }
+}
