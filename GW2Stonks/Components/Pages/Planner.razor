@@ -40,7 +40,7 @@
             <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">To craft (@Cart.Count items)</RadzenText>
             <RadzenDataGrid Data="@Cart.Items" TItem="CartItem" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
                 <Columns>
-                    <RadzenDataGridColumn TItem="CartItem" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                    <RadzenDataGridColumn TItem="CartItem" Width="72px" Sortable="false" TextAlign="TextAlign.Center">
                         <Template Context="c">
                             <div class="gw2-icon-wrap">
                                 @if (!string.IsNullOrEmpty(c.IconUrl))
@@ -136,7 +136,7 @@
                     </RadzenText>
                     <RadzenDataGrid Data="@group.ToList()" TItem="ShoppingLine" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
                         <Columns>
-                            <RadzenDataGridColumn TItem="ShoppingLine" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                            <RadzenDataGridColumn TItem="ShoppingLine" Width="72px" Sortable="false" TextAlign="TextAlign.Center">
                                 <Template Context="s">
                                     <div class="gw2-icon-wrap">
                                         @if (!string.IsNullOrEmpty(s.IconUrl))
@@ -173,7 +173,7 @@
                     <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-2">Materials you already own that were subtracted from the shopping list.</RadzenText>
                     <RadzenDataGrid Data="@_plan.OwnedUsed" TItem="OwnedUsedLine" AllowPaging="false" GridLines="DataGridGridLines.Horizontal">
                         <Columns>
-                            <RadzenDataGridColumn TItem="OwnedUsedLine" Width="56px" Sortable="false" TextAlign="TextAlign.Center">
+                            <RadzenDataGridColumn TItem="OwnedUsedLine" Width="72px" Sortable="false" TextAlign="TextAlign.Center">
                                 <Template Context="o">
                                     <div class="gw2-icon-wrap">
                                         @if (!string.IsNullOrEmpty(o.IconUrl))

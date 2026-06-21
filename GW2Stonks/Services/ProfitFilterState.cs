@@ -17,4 +17,7 @@ public sealed class ProfitFilterState
     public int MinRelists { get; set; }
     public bool ProfitableOnly { get; set; } = true;
     public int FillPercent { get; set; } = 20;
+
+    /// <summary>When set, only show items whose recursive craft tree contains this item id.</summary>
+    public int? RequiredIngredientId { get; set; }
 }

@@ -29,6 +29,35 @@ public sealed class ProfitService
         return mode == PricingMode.InstantBuy ? snap.InstantBuyRows : snap.BuyOrdersRows;
     }
 
+    /// <summary>Items usable in the "requires ingredient" filter (anything used as an ingredient), by name.</summary>
+    public async Task<IReadOnlyList<ItemOption>> GetIngredientOptionsAsync(CancellationToken ct = default)
+    {
+        var snap = await EnsureCurrentAsync(ct);
+        return snap.IngredientOptions;
+    }
+
+    /// <summary>
+    /// Every item whose recursive craft tree contains <paramref name="ingredientId"/> (BFS over the
+    /// reverse-ingredient graph). The ingredient itself is not included.
+    /// </summary>
+    public async Task<IReadOnlySet<int>> GetItemsRequiringAsync(int ingredientId, CancellationToken ct = default)
+    {
+        var snap = await EnsureCurrentAsync(ct);
+        var result = new HashSet<int>();
+        var seen = new HashSet<int> { ingredientId };
+        var queue = new Queue<int>();
+        queue.Enqueue(ingredientId);
+
+        while (queue.Count > 0)
+        {
+            var cur = queue.Dequeue();
+            if (!snap.DirectUsers.TryGetValue(cur, out var users)) continue;
+            foreach (var u in users)
+                if (seen.Add(u)) { result.Add(u); queue.Enqueue(u); }
+        }
+        return result;
+    }
+
     public async Task<CraftNode?> BuildTreeAsync(int itemId, PricingMode mode, CancellationToken ct = default)
     {
         var snap = await EnsureCurrentAsync(ct);
@@ -114,10 +143,25 @@ public sealed class ProfitService
             });
         }
 
-        AssignDisciplines(plan.Steps);
+        // Who consumes whom among crafted items — drives discipline assignment + ordering so a
+        // subcomponent is crafted at the station that needs it, before its consumer.
+        var consumers = new Dictionary<int, List<int>>();
+        foreach (var (itemId, _) in craftUnits)
+        {
+            var recipe = snap.RecipesByOutput[itemId].First(r => r.RecipeId == craftRecipe[itemId]);
+            foreach (var (ingId, _) in recipe.Ingredients)
+                if (craftUnits.ContainsKey(ingId))
+                {
+                    if (!consumers.TryGetValue(ingId, out var list))
+                        consumers[ingId] = list = new List<int>();
+                    list.Add(itemId);
+                }
+        }
+
+        AssignDisciplines(plan.Steps, consumers);
 
         plan.Shopping = plan.Shopping.OrderBy(s => s.Source).ThenByDescending(s => s.TotalPrice ?? 0).ToList();
-        plan.Steps = plan.Steps.OrderByDescending(s => s.Depth).ThenBy(s => s.Discipline).ThenBy(s => s.Name).ToList();
+        plan.Steps = OrderSteps(plan.Steps, consumers);
         plan.TotalBuyCost = plan.Shopping.Sum(s => s.TotalPrice ?? 0);
 
         // Per-item cost / revenue / profit for the cart (the final products being crafted to sell).
@@ -166,46 +210,101 @@ public sealed class ProfitService
         return plan;
     }
 
-    /// <summary>
-    /// Assign each craft step a discipline, minimising the number of distinct disciplines used
-    /// (so you switch crafting characters as little as possible): single-discipline steps fix the
-    /// mandatory set, then flexible steps reuse an already-used discipline where possible.
-    /// </summary>
-    private static void AssignDisciplines(List<CraftStep> steps)
-    {
-        static List<string> Parse(string csv) =>
-            csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+    private static List<string> ParseDisciplines(string csv) =>
+        csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-        var used = new HashSet<string>();
+    /// <summary>
+    /// Assign each craft step a discipline so a subcomponent is crafted at the station that needs it:
+    /// single-discipline steps are fixed; a flexible step (craftable at several disciplines, e.g. an
+    /// insignia) follows a consuming step to that station when possible. Processed finished-product
+    /// first so consumers are decided before their subcomponents; "first occurrence" = deepest consumer.
+    /// </summary>
+    private static void AssignDisciplines(List<CraftStep> steps, IReadOnlyDictionary<int, List<int>> consumers)
+    {
+        var stepById = steps.ToDictionary(s => s.ItemId);
+
         var freq = new Dictionary<string, int>();
         foreach (var step in steps)
-            foreach (var d in Parse(step.Disciplines))
+            foreach (var d in ParseDisciplines(step.Disciplines))
                 freq[d] = freq.GetValueOrDefault(d) + 1;
 
+        // Fixed: items craftable at only one discipline.
         foreach (var step in steps)
         {
-            var cands = Parse(step.Disciplines);
-            if (cands.Count == 1) { step.Discipline = cands[0]; used.Add(cands[0]); }
+            var cands = ParseDisciplines(step.Disciplines);
+            if (cands.Count == 1) step.Discipline = cands[0];
         }
 
-        foreach (var step in steps)
+        // Flexible: finished products first (low depth) so a consumer's discipline is known before
+        // the subcomponent it uses, letting the subcomponent follow it to the same station.
+        foreach (var step in steps.Where(s => string.IsNullOrEmpty(s.Discipline)).OrderBy(s => s.Depth).ToList())
         {
-            if (!string.IsNullOrEmpty(step.Discipline)) continue;
-            var cands = Parse(step.Disciplines);
+            var cands = ParseDisciplines(step.Disciplines);
             if (cands.Count == 0) { step.Discipline = ""; continue; }
 
-            var reuse = cands.FirstOrDefault(used.Contains);
-            if (reuse is not null)
+            string? pick = null;
+            if (consumers.TryGetValue(step.ItemId, out var cons))
+                pick = cons
+                    .Select(id => stepById.GetValueOrDefault(id))
+                    .Where(c => c is not null && !string.IsNullOrEmpty(c!.Discipline) && cands.Contains(c.Discipline))
+                    .OrderByDescending(c => c!.Depth).ThenBy(c => c!.Name)
+                    .Select(c => c!.Discipline)
+                    .FirstOrDefault();
+
+            // No consuming station can make it: keep switching low — reuse a discipline already in
+            // play, else the most common candidate.
+            pick ??= cands.FirstOrDefault(c => steps.Any(o => o.Discipline == c))
+                     ?? cands.OrderByDescending(c => freq.GetValueOrDefault(c)).First();
+
+            step.Discipline = pick;
+        }
+    }
+
+    /// <summary>
+    /// Order craft steps so dependencies come first: within a station, deepest sub-components before
+    /// their consumers; across stations, a station whose output feeds another is listed first
+    /// (topological sort, with a deepest-first fallback if disciplines form a cycle).
+    /// </summary>
+    private static List<CraftStep> OrderSteps(List<CraftStep> steps, IReadOnlyDictionary<int, List<int>> consumers)
+    {
+        var stepById = steps.ToDictionary(s => s.ItemId);
+        var disciplines = steps.Select(s => s.Discipline).Distinct().ToList();
+
+        // Station edges: disc(subcomponent) -> disc(consumer) when they differ.
+        var outs = disciplines.ToDictionary(d => d, _ => new HashSet<string>());
+        var indeg = disciplines.ToDictionary(d => d, _ => 0);
+        foreach (var (ingId, cons) in consumers)
+        {
+            if (!stepById.TryGetValue(ingId, out var ing)) continue;
+            foreach (var cId in cons)
             {
-                step.Discipline = reuse;
-            }
-            else
-            {
-                var pick = cands.OrderByDescending(d => freq.GetValueOrDefault(d)).First();
-                step.Discipline = pick;
-                used.Add(pick);
+                if (!stepById.TryGetValue(cId, out var c) || ing.Discipline == c.Discipline) continue;
+                if (outs[ing.Discipline].Add(c.Discipline)) indeg[c.Discipline]++;
             }
         }
+
+        var maxDepth = disciplines.ToDictionary(d => d, d => steps.Where(s => s.Discipline == d).Max(s => s.Depth));
+
+        // Kahn topological sort; among ready stations the one making the deepest items goes first.
+        var order = new List<string>();
+        var ready = disciplines.Where(d => indeg[d] == 0).ToList();
+        while (ready.Count > 0)
+        {
+            var d = ready.OrderByDescending(x => maxDepth[x]).ThenBy(x => x).First();
+            ready.Remove(d);
+            order.Add(d);
+            foreach (var b in outs[d])
+                if (--indeg[b] == 0) ready.Add(b);
+        }
+        order.AddRange(disciplines.Except(order).OrderByDescending(d => maxDepth[d]).ThenBy(d => d));
+
+        var orderIndex = order.Select((d, i) => (d, i)).ToDictionary(x => x.d, x => x.i);
+
+        return steps
+            .OrderBy(s => orderIndex.GetValueOrDefault(s.Discipline, int.MaxValue))
+            .ThenByDescending(s => s.Depth)
+            .ThenBy(s => s.Name)
+            .ToList();
     }
 
     // ── Snapshot management ─────────────────────────────────────────────────
@@ -258,6 +357,9 @@ public sealed class ProfitService
 
         var recipesByOutput = new Dictionary<int, List<CraftCostSolver.RecipeInfo>>();
         var recipeMeta = new Dictionary<int, RecipeMeta>();
+        // Reverse index: ingredient id -> output items that directly use it. BFS over this finds
+        // every item whose recursive craft tree contains a given ingredient.
+        var directUsers = new Dictionary<int, List<int>>();
         foreach (var r in recipeEntities)
         {
             var info = new CraftCostSolver.RecipeInfo(
@@ -269,7 +371,21 @@ public sealed class ProfitService
             list.Add(info);
 
             recipeMeta[r.Id] = new RecipeMeta(r.Disciplines, r.MinRating, r.OutputItemCount);
+
+            foreach (var ing in r.Ingredients)
+            {
+                if (!directUsers.TryGetValue(ing.ItemId, out var users))
+                    directUsers[ing.ItemId] = users = new List<int>();
+                users.Add(r.OutputItemId);
+            }
         }
+
+        // Items selectable in the "requires ingredient" filter: anything used as an ingredient.
+        var ingredientOptions = directUsers.Keys
+            .Where(id => items.TryGetValue(id, out var m) && !string.IsNullOrEmpty(m.Name))
+            .Select(id => new ItemOption(id, items[id].Name, items[id].Icon))
+            .OrderBy(o => o.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         var instantBuy = new CraftCostSolver(prices, recipesByOutput, VendorPrices.ByItemId, TimeGatedItems.Ids, PricingMode.InstantBuy);
         var buyOrders = new CraftCostSolver(prices, recipesByOutput, VendorPrices.ByItemId, TimeGatedItems.Ids, PricingMode.BuyOrders);
@@ -283,7 +399,9 @@ public sealed class ProfitService
             RecipeMeta = recipeMeta,
             Volumes = volumes,
             InstantBuy = instantBuy,
-            BuyOrders = buyOrders
+            BuyOrders = buyOrders,
+            DirectUsers = directUsers,
+            IngredientOptions = ingredientOptions
         };
 
         snap.InstantBuyRows = BuildRows(instantBuy, snap);
@@ -449,6 +567,8 @@ public sealed class ProfitService
         public required IReadOnlyDictionary<int, (int SoldPerDay, int SupplyNow)> Volumes { get; init; }
         public required CraftCostSolver InstantBuy { get; init; }
         public required CraftCostSolver BuyOrders { get; init; }
+        public required IReadOnlyDictionary<int, List<int>> DirectUsers { get; init; }
+        public required IReadOnlyList<ItemOption> IngredientOptions { get; init; }
         public List<ProfitRow> InstantBuyRows { get; set; } = new();
         public List<ProfitRow> BuyOrdersRows { get; set; } = new();
         public object TreeLock { get; } = new();

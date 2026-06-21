@@ -3,6 +3,7 @@
 @inject ProfitService ProfitSvc
 @inject VolumeService VolumeSvc
 @inject CartService Cart
+@inject AccountService Account
 @inject ProfitFilterState State
 @inject NotificationService Notifications
 @inject NavigationManager Nav
@@ -42,6 +43,24 @@
                 <RadzenDropDown @bind-Value="State.SelectedTypes" @bind-Value:after="ApplyFilters" Data="@_types"
                                 Multiple="true" AllowClear="true" Chips="true" style="width:14rem" />
             </RadzenFormField>
+            <RadzenFormField Text="Requires ingredient" Variant="Variant.Outlined">
+                <RadzenDropDown @bind-Value="State.RequiredIngredientId" @bind-Value:after="OnRequiredIngredientChanged"
+                                Data="@_ingredientOptions" TextProperty="Name" ValueProperty="Id" TValue="int?"
+                                AllowFiltering="true" FilterAsYouType="true" AllowVirtualization="true" AllowClear="true"
+                                FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                                Placeholder="Any" style="width:17rem">
+                    <Template Context="data">
+                        @{ var opt = (ItemOption)data; }
+                        <div style="display:flex;align-items:center;gap:0.4rem;">
+                            @if (!string.IsNullOrEmpty(opt.IconUrl))
+                            {
+                                <img class="gw2-tree-icon" src="@opt.IconUrl" alt="" loading="lazy" />
+                            }
+                            <span>@opt.Name</span>
+                        </div>
+                    </Template>
+                </RadzenDropDown>
+            </RadzenFormField>
             <RadzenFormField Text="Min profit (copper)" Variant="Variant.Outlined">
                 <RadzenNumeric @bind-Value="State.MinProfitCopper" @bind-Value:after="ApplyFilters" Min="0" style="width:8rem" />
             </RadzenFormField>
@@ -69,6 +88,7 @@
             <RadzenNumeric @bind-Value="State.FillPercent" @bind-Value:after="OnFillPercentChanged" Min="1" Max="100" style="width:6rem" />
         </RadzenFormField>
         <RadzenButton Text="@($"Fill cart from {_view.Count} shown")" Icon="add_shopping_cart"
+                      IsBusy="@_filling" BusyText="Filling…"
                       Click="@FillCart" Disabled="@(_loading || _view.Count == 0)" />
         <RadzenButton Text="@($"Cart ({Cart.Count})")" Icon="shopping_cart" ButtonStyle="ButtonStyle.Secondary"
                       Click="@(() => Nav.NavigateTo("planner"))" />
@@ -100,7 +120,7 @@
                 </RadzenCard>
             </Template>
             <Columns>
-                <RadzenDataGridColumn TItem="ProfitRow" Title="" Sortable="false" Width="56px" TextAlign="TextAlign.Center">
+                <RadzenDataGridColumn TItem="ProfitRow" Title="" Sortable="false" Width="72px" TextAlign="TextAlign.Center">
                     <Template Context="row">
                         <div class="gw2-icon-wrap">
                             @if (!string.IsNullOrEmpty(row.IconUrl))
@@ -180,7 +200,10 @@
 
     private List<string> _disciplines = new();
     private List<string> _types = new();
+    private List<ItemOption> _ingredientOptions = new();
+    private IReadOnlySet<int>? _requiredSet;
     private bool _volumeBusy;
+    private bool _filling;
 
     protected override void OnInitialized() => Cart.OnChange += OnCartChanged;
 
@@ -205,6 +228,8 @@
             .SelectMany(r => r.Disciplines.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             .Distinct().OrderBy(d => d).ToList();
         _types = _rows.Select(r => r.Type).Where(t => !string.IsNullOrEmpty(t)).Distinct().OrderBy(t => t).ToList();
+        _ingredientOptions = (await ProfitSvc.GetIngredientOptionsAsync()).ToList();
+        await UpdateRequiredSet();
 
         RecomputeDailyProfit();
         ApplyFilters();
@@ -227,12 +252,25 @@
         ApplyFilters();
     }
 
+    private async Task OnRequiredIngredientChanged()
+    {
+        await UpdateRequiredSet();
+        ApplyFilters();
+    }
+
+    private async Task UpdateRequiredSet() =>
+        _requiredSet = State.RequiredIngredientId is int id
+            ? await ProfitSvc.GetItemsRequiringAsync(id)
+            : null;
+
     private void ApplyFilters()
     {
         IEnumerable<ProfitRow> q = _rows;
 
         if (State.ProfitableOnly)
             q = q.Where(r => r.Profit > 0);
+        if (_requiredSet is not null)
+            q = q.Where(r => _requiredSet.Contains(r.Id));
         if (!string.IsNullOrWhiteSpace(State.NameFilter))
             q = q.Where(r => r.Name.Contains(State.NameFilter, StringComparison.OrdinalIgnoreCase));
         if (State.SelectedDisciplines.Any())
@@ -254,16 +292,38 @@
         StateHasChanged();
     }
 
-    private void FillCart()
+    private async Task FillCart()
     {
-        var added = 0;
-        foreach (var r in _view)
+        if (_filling) return;
+        _filling = true;
+        StateHasChanged();
+        try
         {
-            var qty = FillQty(r);
-            if (qty > 0) { Cart.Add(r.Id, r.Name, r.IconUrl, qty); added++; }
+            // Subtract what's already listed for sale on the TP, so we only craft the shortfall.
+            var listed = await Account.GetListedQuantitiesAsync();
+
+            var added = 0;
+            var reduced = 0;
+            foreach (var r in _view)
+            {
+                var target = FillQty(r);
+                if (target <= 0) continue;
+
+                var have = listed.GetValueOrDefault(r.Id);
+                var toAdd = Math.Max(0, target - have);
+                if (have > 0) reduced++;
+                if (toAdd > 0) { Cart.Add(r.Id, r.Name, r.IconUrl, toAdd); added++; }
+            }
+
+            var msg = $"Added {added} item(s) at {State.FillPercent}% of daily sales";
+            if (reduced > 0) msg += $" · {reduced} reduced by your existing TP listings";
+            Notifications.Notify(NotificationSeverity.Success, "Cart filled", msg, 5000);
         }
-        Notifications.Notify(NotificationSeverity.Success, "Cart filled",
-            $"Added {added} item(s) at {State.FillPercent}% of daily sales", 4000);
+        finally
+        {
+            _filling = false;
+            StateHasChanged();
+        }
     }
 
     private async Task RefreshVolume()
