@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
     public DbSet<SyncState> SyncStates => Set<SyncState>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<OwnedItem> OwnedItems => Set<OwnedItem>();
+    public DbSet<CartEntry> CartEntries => Set<CartEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -96,6 +97,13 @@ public class AppDbContext : DbContext
         {
             e.HasKey(o => o.ItemId);
             e.Property(o => o.ItemId).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CartEntry>(e =>
+        {
+            e.HasKey(c => c.ItemId);
+            e.Property(c => c.ItemId).ValueGeneratedNever();
+            e.Property(c => c.Name).HasMaxLength(200);
         });
     }
 }
